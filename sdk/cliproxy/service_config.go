@@ -23,6 +23,10 @@ func (s *Service) applyWatcherConfigUpdate(newCfg *config.Config) {
 type configCommit struct {
 	cfg      *config.Config
 	sequence uint64
+	// changed is false when the watcher re-delivers the running config pointer
+	// (first full load, auth-only rescans). Rebinding executors then would only
+	// close live Codex websocket sessions.
+	changed bool
 }
 
 type routingRuntimeState struct {
@@ -125,12 +129,13 @@ func (s *Service) commitConfigUpdate(newCfg *config.Config) configCommit {
 		return configCommit{}
 	}
 	s.cfgMu.Lock()
+	changed := s.cfg != newCfg
 	s.cfg = newCfg
 	s.cfgMu.Unlock()
 	s.cancelStaleAntigravityProbes("")
 	s.configSequence++
 	registry.UpdateModelCatalogSources(newCfg.Models, newCfg.Home.Enabled)
-	return configCommit{cfg: newCfg, sequence: s.configSequence}
+	return configCommit{cfg: newCfg, sequence: s.configSequence, changed: changed}
 }
 
 func (s *Service) configCommitCurrent(commit configCommit) bool {
@@ -191,7 +196,7 @@ func (s *Service) applyConfigRuntime(ctx context.Context, commit configCommit, s
 	}
 	s.registerAvailableExecutors(registrationCtx, executorRegistrationOptions{
 		includeBaseline:   cfg.Home.Enabled,
-		forceReplaceAuths: true,
+		forceReplaceAuths: commit.changed,
 		auths:             auths,
 	})
 	if errContext := ctx.Err(); errContext != nil {
