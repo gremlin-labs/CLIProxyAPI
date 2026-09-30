@@ -6,8 +6,10 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/thinking"
@@ -360,17 +362,20 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 			var event bytes.Buffer
 			var upstreamMessageID string
 			upstreamCompleted := false
-			flushEvent := func() bool {
+			flushEvent := func() (bool, error) {
 				if event.Len() == 0 {
-					return true
+					return true, nil
 				}
 				cloned := bytes.Clone(event.Bytes())
 				event.Reset()
+				if errEvent := classifyClaudeStreamErrorEvent(cloned, httpResp.Header, e.modelLevelCooling()); errEvent != nil {
+					return true, errEvent
+				}
 				select {
 				case out <- cliproxyexecutor.StreamChunk{Payload: cloned}:
-					return true
+					return true, nil
 				case <-ctx.Done():
-					return false
+					return false, nil
 				}
 			}
 			for scanner.Scan() {
@@ -388,7 +393,10 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 				event.Write(line)
 				event.WriteByte('\n')
 				if len(bytes.TrimSpace(line)) == 0 {
-					if !flushEvent() {
+					if flushed, errEvent := flushEvent(); errEvent != nil {
+						emitResponseError(errEvent)
+						return
+					} else if !flushed {
 						emitCancellation(ctx.Err())
 						return
 					}
@@ -397,7 +405,10 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 					}
 				}
 			}
-			if !flushEvent() {
+			if flushed, errEvent := flushEvent(); errEvent != nil {
+				emitResponseError(errEvent)
+				return
+			} else if !flushed {
 				emitCancellation(ctx.Err())
 				return
 			}
@@ -430,6 +441,7 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 		helps.InitializeApplyPatchStream(ctx, to, responseFormat, req.Model, helps.ApplyPatchOriginalRequest(req, opts), bodyForTranslation, &param)
 		var upstreamMessageID string
 		upstreamCompleted := false
+		streamEventName := ""
 		for scanner.Scan() {
 			line := scanner.Bytes()
 			observeClaudeStreamLine(line, &upstreamMessageID, &upstreamCompleted)
@@ -442,6 +454,19 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 				return
 			}
 			line = e.restoreResponseModel(restoredLine, req.Model)
+			trimmedLine := bytes.TrimSpace(line)
+			if field, value, found := bytes.Cut(trimmedLine, []byte(":")); found {
+				value = bytes.TrimSpace(value)
+				switch string(field) {
+				case "event":
+					streamEventName = string(value)
+				case "data":
+					if errEvent := classifyClaudeStreamError(streamEventName, value, httpResp.Header, e.modelLevelCooling()); errEvent != nil {
+						emitResponseError(errEvent)
+						return
+					}
+				}
+			}
 			chunks := sdktranslator.TranslateStream(
 				ctx,
 				to,
@@ -472,6 +497,9 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 			if upstreamCompleted {
 				break
 			}
+			if len(trimmedLine) == 0 {
+				streamEventName = ""
+			}
 		}
 		if helps.EndApplyPatchStream(ctx, param, reporter, out, statusErr{code: http.StatusBadGateway, msg: helps.ApplyPatchUpstreamErrorMessage}) {
 			return
@@ -501,6 +529,66 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 		result = wrapClaudeThinkingReplayStream(ctx, result, replayScope)
 	}
 	return result, nil
+}
+
+func classifyClaudeStreamErrorEvent(event []byte, headers http.Header, modelLevelCooling bool) error {
+	var eventName string
+	var data []byte
+	for _, line := range bytes.Split(event, []byte("\n")) {
+		field, value, found := bytes.Cut(line, []byte(":"))
+		if !found {
+			continue
+		}
+		value = bytes.TrimSpace(value)
+		switch string(field) {
+		case "event":
+			eventName = string(value)
+		case "data":
+			if len(data) > 0 {
+				data = append(data, '\n')
+			}
+			data = append(data, value...)
+		}
+	}
+	return classifyClaudeStreamError(eventName, data, headers, modelLevelCooling)
+}
+
+func classifyClaudeStreamError(eventName string, data []byte, headers http.Header, modelLevelCooling bool) error {
+	if eventName != "error" && gjson.GetBytes(data, "type").String() != "error" {
+		return nil
+	}
+	status := http.StatusBadGateway
+	hint := gjson.GetBytes(data, "error.http_status")
+	if hint.Type == gjson.Number && hint.Float() == float64(hint.Int()) && hint.Int() >= 400 && hint.Int() <= 599 {
+		status = int(hint.Int())
+	} else {
+		switch gjson.GetBytes(data, "error.type").String() {
+		case "rate_limit_error":
+			status = http.StatusTooManyRequests
+		case "overloaded_error":
+			status = http.StatusServiceUnavailable
+		}
+	}
+	retryAfter := helps.ParseClaudeRateLimitReset(headers, time.Now())
+	if retryAfter == nil && gjson.GetBytes(data, "error.retryable").Type != gjson.False {
+		if delay := gjson.GetBytes(data, "error.retry_after"); delay.Type == gjson.Number {
+			retryAfter = claudeStreamRetryDelay(delay.Float())
+		}
+	}
+	return classifyClaudeStatusError(statusErr{code: status, msg: string(data), retryAfter: retryAfter}, headers, modelLevelCooling)
+}
+
+// claudeStreamRetryDelay converts an error event's retry_after seconds into a
+// duration, ignoring non-positive or out-of-range values.
+func claudeStreamRetryDelay(seconds float64) *time.Duration {
+	if math.IsNaN(seconds) || math.IsInf(seconds, 0) || seconds <= 0 || seconds >= float64(math.MaxInt64)/float64(time.Second) {
+		return nil
+	}
+	d := time.Duration(seconds * float64(time.Second))
+	if d <= 0 {
+		return nil
+	}
+	return &d
 }
 
 func validateClaudeStreamingResponse(data []byte) error {
