@@ -417,6 +417,10 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 					// conductor can transparently retry on another credential, and report the
 					// status the upstream refused to put on the wire.
 					helps.LogWithRequestID(ctx).Debugf("codex websockets executor: bootstrap overload rejection after %d messages read, failing over", bufferedFrames)
+					if isCodexUsageLimitError(terminalBody) {
+						// Keep streamErr: it carries the quota classification with the configured cooling scope.
+						return nil, streamErr
+					}
 					return nil, newCodexBootstrapOverloadErr(terminalBody)
 				}
 				bootstrapTerminalErr = streamErr
