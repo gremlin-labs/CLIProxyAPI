@@ -1045,3 +1045,48 @@ func TestBuildHTTPTransportHTTPSProxyClonedTransport(t *testing.T) {
 		t.Fatalf("proxy returned error: %v", errProxy)
 	}
 }
+
+func TestBuildHTTPTransportSOCKS5DialHonorsContextCancellation(t *testing.T) {
+	t.Parallel()
+
+	// A SOCKS5 proxy that accepts the connection but never answers the handshake.
+	listener, errListen := net.Listen("tcp", "127.0.0.1:0")
+	if errListen != nil {
+		t.Fatalf("listen: %v", errListen)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	go func() {
+		for {
+			conn, errAccept := listener.Accept()
+			if errAccept != nil {
+				return
+			}
+			t.Cleanup(func() { _ = conn.Close() })
+		}
+	}()
+
+	transport, _, errBuild := BuildHTTPTransport("socks5://" + listener.Addr().String())
+	if errBuild != nil {
+		t.Fatalf("BuildHTTPTransport() error = %v", errBuild)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		conn, errDial := transport.DialContext(ctx, "tcp", "example.com:443")
+		if conn != nil {
+			_ = conn.Close()
+		}
+		done <- errDial
+	}()
+
+	select {
+	case errDial := <-done:
+		if errDial == nil {
+			t.Fatal("DialContext() error = nil, want cancellation error")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("DialContext() ignored context cancellation on a stalled SOCKS5 proxy")
+	}
+}

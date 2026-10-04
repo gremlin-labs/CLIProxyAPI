@@ -254,9 +254,14 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	}
 
 	// Create HTTP server
+	// ReadHeaderTimeout and IdleTimeout only bound inbound client connections
+	// (slow header senders and idle keep-alive sockets). They never affect a
+	// request body, a streamed response, or a hijacked websocket.
 	s.server = &http.Server{
-		Addr:    fmt.Sprintf("%s:%d", cfg.Host, cfg.Port),
-		Handler: engine,
+		Addr:              fmt.Sprintf("%s:%d", cfg.Host, cfg.Port),
+		Handler:           engine,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	return s

@@ -783,6 +783,28 @@ func TestHealthzAccessLogging(t *testing.T) {
 	}
 }
 
+func TestNewServerConfiguresHTTPServerLivenessTimeouts(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t)
+	if server.server == nil {
+		t.Fatal("server.server = nil")
+	}
+	if server.server.ReadHeaderTimeout <= 0 {
+		t.Fatal("ReadHeaderTimeout is not bounded")
+	}
+	if server.server.IdleTimeout <= 0 {
+		t.Fatal("IdleTimeout is not bounded")
+	}
+	if server.server.ReadHeaderTimeout > time.Minute || server.server.IdleTimeout > 5*time.Minute {
+		t.Fatalf("server liveness timeouts too large: ReadHeader=%v Idle=%v", server.server.ReadHeaderTimeout, server.server.IdleTimeout)
+	}
+	// Request bodies and streamed responses must stay unbounded.
+	if server.server.ReadTimeout != 0 || server.server.WriteTimeout != 0 {
+		t.Fatalf("ReadTimeout=%v WriteTimeout=%v, want 0", server.server.ReadTimeout, server.server.WriteTimeout)
+	}
+}
+
 func TestCodexLiveRoutesRequireAuthAndAreRegistered(t *testing.T) {
 	server := newTestServer(t)
 
