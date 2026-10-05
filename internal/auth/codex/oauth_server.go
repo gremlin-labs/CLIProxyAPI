@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/webfont"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -259,7 +260,7 @@ func (s *OAuthServer) handleSuccess(w http.ResponseWriter, r *http.Request) {
 // Returns:
 //   - string: The HTML content for the success page
 func (s *OAuthServer) generateSuccessHTML(setupRequired bool, platformURL string) string {
-	html := LoginSuccessHtml
+	html := webfont.InjectHead(LoginSuccessHtml)
 
 	// Replace platform URL placeholder
 	html = strings.Replace(html, "{{PLATFORM_URL}}", platformURL, -1)
