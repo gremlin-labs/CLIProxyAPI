@@ -915,6 +915,9 @@ type SessionAffinitySelector struct {
 	cache            *SessionCache
 	matcher          *cliproxysession.MerklePrefixMatcher
 	subagentAffinity bool
+	// returnToPreferred moves a failover binding back to a strictly higher-priority
+	// credential once one is available again.
+	returnToPreferred bool
 
 	// awayMu guards awaySince, which records when a pinned credential was first
 	// found unavailable for a session key. While the outage is shorter than
@@ -973,6 +976,9 @@ type SessionAffinityConfig struct {
 	Fallback         Selector
 	TTL              time.Duration
 	SubagentAffinity *bool
+	// ReturnToPreferred moves a binding on a lower-priority credential back to a
+	// strictly higher-priority one once it is available again. Default: false.
+	ReturnToPreferred bool
 }
 
 // NewSessionAffinitySelector creates a new session-aware selector.
@@ -996,10 +1002,11 @@ func NewSessionAffinitySelectorWithConfig(cfg SessionAffinityConfig) *SessionAff
 		subagentAffinity = *cfg.SubagentAffinity
 	}
 	return &SessionAffinitySelector{
-		fallback:         cfg.Fallback,
-		cache:            NewSessionCache(cfg.TTL),
-		matcher:          cliproxysession.NewMerklePrefixMatcher(cfg.TTL),
-		subagentAffinity: subagentAffinity,
+		fallback:          cfg.Fallback,
+		cache:             NewSessionCache(cfg.TTL),
+		matcher:           cliproxysession.NewMerklePrefixMatcher(cfg.TTL),
+		subagentAffinity:  subagentAffinity,
+		returnToPreferred: cfg.ReturnToPreferred,
 	}
 }
 
@@ -1018,6 +1025,8 @@ func (s *SessionAffinitySelector) Trees() *cliproxysession.InMemorySessionTreeSt
 // available is reused even when a higher-priority credential recovers. Credential priority
 // applies to cold bindings, requests without a session, and genuine bound-credential
 // failover, so the fallback selector only ever receives the highest available priority tier.
+// With ReturnToPreferred, a binding left on a lower priority by a failover moves back up
+// once a higher-priority credential is available again.
 //
 // Note: The cache key includes provider, session ID, and model to handle cases where
 // a session uses multiple models (e.g., gemini-2.5-pro and gemini-3-flash-preview)
@@ -1111,6 +1120,12 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 	if cachedAuthID, ok := s.cache.GetAndRefresh(cacheKey); ok {
 		for _, auth := range available {
 			if auth.ID == cachedAuthID {
+				if preferred := s.preferredReturnPick(ctx, provider, model, opts, auth, fallbackAuths); preferred != nil {
+					bind(preferred.ID)
+					s.clearAway(cacheKey)
+					entry.Infof("session-affinity: returned to preferred credential | session=%s from=%s auth=%s provider=%s model=%s", truncateSessionID(primaryID), auth.ID, preferred.ID, provider, model)
+					return preferred, nil
+				}
 				bind(auth.ID)
 				s.clearAway(cacheKey)
 				entry.Infof("session-affinity: cache hit | session=%s auth=%s provider=%s model=%s", truncateSessionID(primaryID), auth.ID, provider, model)
@@ -1153,6 +1168,11 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 			for _, auth := range available {
 				if auth.ID == cachedAuthID {
 					if !isSubagent || s.subagentAffinity {
+						if preferred := s.preferredReturnPick(ctx, provider, model, opts, auth, fallbackAuths); preferred != nil {
+							bind(preferred.ID)
+							entry.Infof("session-affinity: returned to preferred credential | session=%s fallback=%s from=%s auth=%s provider=%s model=%s", truncateSessionID(primaryID), truncateSessionID(fallbackID), auth.ID, preferred.ID, provider, model)
+							return preferred, nil
+						}
 						bind(auth.ID)
 						if isFork {
 							entry.Infof("session-affinity: fork cache hit | session=%s parent=%s auth=%s provider=%s model=%s", truncateSessionID(primaryID), truncateSessionID(fallbackID), auth.ID, provider, model)
@@ -1180,6 +1200,28 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 		entry.Infof("session-affinity: cache miss, new binding | session=%s auth=%s provider=%s model=%s", truncateSessionID(primaryID), auth.ID, provider, model)
 	}
 	return auth, nil
+}
+
+// preferredReturnPick returns a credential to move a binding to when return-to-
+// preferred is on and bound sits below the highest available priority, which only
+// happens after a failover. preferred holds the highest-priority candidates. Equal
+// priorities never move a binding, so the fallback selector's ordering cannot make
+// threads flap.
+func (s *SessionAffinitySelector) preferredReturnPick(ctx context.Context, provider, model string, opts cliproxyexecutor.Options, bound *Auth, preferred []*Auth) *Auth {
+	if s == nil || !s.returnToPreferred || bound == nil || len(preferred) == 0 {
+		return nil
+	}
+	if authPriority(preferred[0]) <= authPriority(bound) {
+		return nil
+	}
+	if carriesCodexEncryptedState(provider, opts.OriginalRequest) {
+		return nil
+	}
+	pick, err := s.fallback.Pick(ctx, provider, model, opts, preferred)
+	if err != nil || pick == nil || pick.ID == bound.ID || authPriority(pick) <= authPriority(bound) {
+		return nil
+	}
+	return pick
 }
 
 // holdEncryptedThread reports whether a thread pinned to boundID should wait for it

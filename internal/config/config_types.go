@@ -375,6 +375,12 @@ type RoutingConfig struct {
 	// When false, subagents are distributed across the credential pool via the fallback selector.
 	// Default: true. Ignored when SessionAffinity is false.
 	SessionAffinitySubagents *bool `yaml:"session-affinity-subagents,omitempty" json:"session-affinity-subagents,omitempty"`
+
+	// SessionAffinityReturnToPreferred moves a binding that failed over to a lower-priority
+	// credential back to a strictly higher-priority one once it is available again. Equal
+	// priorities never move a binding. Costs the thread's prompt cache once per return.
+	// Default: false. Ignored when SessionAffinity is false.
+	SessionAffinityReturnToPreferred bool `yaml:"session-affinity-return-to-preferred,omitempty" json:"session-affinity-return-to-preferred,omitempty"`
 }
 
 // OAuthModelAlias defines a model ID alias for a specific channel.

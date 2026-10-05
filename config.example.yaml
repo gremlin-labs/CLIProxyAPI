@@ -169,6 +169,12 @@ routing:
   # for maximum parallel concurrency.
   # Ignored when routing.session-affinity is false.
   session-affinity-subagents: true
+  # When true, a binding that failed over to a lower-priority credential (because every
+  # higher-priority one was out) returns to a higher-priority credential once one is
+  # available again. Equal priorities never move a binding, so threads do not flap.
+  # Each return costs that thread's prompt cache once. Codex threads carrying encrypted
+  # reasoning or compaction items never move. Default: false.
+  # session-affinity-return-to-preferred: false
 
   # When true, unprefixed model requests only use credentials without a prefix (except when prefix == model name).
   force-model-prefix: false
