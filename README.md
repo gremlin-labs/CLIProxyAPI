@@ -62,7 +62,7 @@ This is the gremlinlabs fork of [router-for-me/CLIProxyAPI](https://github.com/r
 | Reliability | Connection timeouts | The server times out slow header senders and idle keep-alive connections; streamed responses are unaffected. Dials through a SOCKS5 proxy are now cancelled when the request is. |
 | UI | Instrument Sans | The OAuth success pages and the setup warning page use the bundled Instrument Sans font (SIL Open Font License), inlined so the pages make no external requests. |
 
-Management panel changes live in [gremlin-labs/Cli-Proxy-API-Management-Center](https://github.com/gremlin-labs/Cli-Proxy-API-Management-Center). The proxy still downloads the upstream panel by default.
+The web dashboard at `/management.html` is a separate project: [gremlin-labs/Cli-Proxy-API-Management-Center](https://github.com/gremlin-labs/Cli-Proxy-API-Management-Center), our fork of the upstream panel with its UI updates. The proxy does not bundle it; on first use and every few hours it downloads `management.html` from the latest release of that repository, checks it against the SHA-256 digest GitHub records for the asset, and serves it locally. Set `management.panel-github-repository` to use a different panel, or `management.disable-auto-update-panel` to stop the periodic update checks.
 
 ## Overview
 

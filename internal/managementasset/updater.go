@@ -26,13 +26,12 @@ import (
 )
 
 const (
-	defaultManagementReleaseURL  = "https://api.github.com/repos/router-for-me/Cli-Proxy-API-Management-Center/releases/latest"
-	defaultManagementFallbackURL = "https://cpamc.router-for.me/"
-	managementAssetName          = "management.html"
-	httpUserAgent                = "CLIProxyAPI-management-updater"
-	managementSyncMinInterval    = 30 * time.Second
-	updateCheckInterval          = 3 * time.Hour
-	maxAssetDownloadSize         = 50 << 20 // 10 MB safety limit for management asset downloads
+	defaultManagementReleaseURL = "https://api.github.com/repos/gremlin-labs/Cli-Proxy-API-Management-Center/releases/latest"
+	managementAssetName         = "management.html"
+	httpUserAgent               = "CLIProxyAPI-management-updater"
+	managementSyncMinInterval   = 30 * time.Second
+	updateCheckInterval         = 3 * time.Hour
+	maxAssetDownloadSize        = 50 << 20 // 10 MB safety limit for management asset downloads
 )
 
 // ManagementFileName exposes the control panel asset filename.
@@ -216,15 +215,6 @@ func EnsureLatestManagementHTML(ctx context.Context, staticDir string, proxyURL 
 		lastUpdateCheckTime = now
 		lastUpdateCheckMu.Unlock()
 
-		localFileMissing := false
-		if _, errStat := os.Stat(localPath); errStat != nil {
-			if errors.Is(errStat, os.ErrNotExist) {
-				localFileMissing = true
-			} else {
-				log.WithError(errStat).Debug("failed to stat local management asset")
-			}
-		}
-
 		if errMkdirAll := os.MkdirAll(staticDir, 0o755); errMkdirAll != nil {
 			log.WithError(errMkdirAll).Warn("failed to prepare static directory for management asset")
 			return nil, nil
@@ -243,13 +233,8 @@ func EnsureLatestManagementHTML(ctx context.Context, staticDir string, proxyURL 
 
 		asset, remoteHash, err := fetchLatestAsset(ctx, client, releaseURL)
 		if err != nil {
-			if localFileMissing {
-				log.WithError(err).Warn("failed to fetch latest management release information, trying fallback page")
-				if ensureFallbackManagementHTML(ctx, client, localPath) {
-					return nil, nil
-				}
-				return nil, nil
-			}
+			// No unverified fallback: a missing panel is fetched again on the next
+			// access or scheduled check rather than replaced by a page from elsewhere.
 			log.WithError(err).Warn("failed to fetch latest management release information")
 			return nil, nil
 		}
@@ -261,13 +246,6 @@ func EnsureLatestManagementHTML(ctx context.Context, staticDir string, proxyURL 
 
 		data, downloadedHash, err := downloadAsset(ctx, client, asset.BrowserDownloadURL)
 		if err != nil {
-			if localFileMissing {
-				log.WithError(err).Warn("failed to download management asset, trying fallback page")
-				if ensureFallbackManagementHTML(ctx, client, localPath) {
-					return nil, nil
-				}
-				return nil, nil
-			}
 			log.WithError(err).Warn("failed to download management asset")
 			return nil, nil
 		}
@@ -288,25 +266,6 @@ func EnsureLatestManagementHTML(ctx context.Context, staticDir string, proxyURL 
 
 	_, err := os.Stat(localPath)
 	return err == nil
-}
-
-func ensureFallbackManagementHTML(ctx context.Context, client *http.Client, localPath string) bool {
-	data, downloadedHash, err := downloadAsset(ctx, client, defaultManagementFallbackURL)
-	if err != nil {
-		log.WithError(err).Warn("failed to download fallback management control panel page")
-		return false
-	}
-
-	log.Warnf("management asset downloaded from fallback URL without digest verification (hash=%s) — "+
-		"enable verified GitHub updates by keeping disable-auto-update-panel set to false", downloadedHash)
-
-	if err = atomicWriteFile(localPath, data); err != nil {
-		log.WithError(err).Warn("failed to persist fallback management control panel page")
-		return false
-	}
-
-	log.Infof("management asset updated from fallback page successfully (hash=%s)", downloadedHash)
-	return true
 }
 
 func resolveReleaseURL(repo string) string {
