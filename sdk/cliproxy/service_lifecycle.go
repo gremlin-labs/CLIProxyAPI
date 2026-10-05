@@ -89,6 +89,8 @@ func (s *Service) Run(ctx context.Context) error {
 				log.Warnf("failed to restore cooldown state: %v", errRestoreCooldown)
 			}
 		}
+		s.restoreRoutingState()
+		s.startRoutingStatePersistence(ctx)
 		s.registerAvailableExecutors(ctx, executorRegistrationOptions{
 			includeBaseline: true,
 			auths:           s.coreManager.List(),
@@ -249,6 +251,7 @@ func (s *Service) Shutdown(ctx context.Context) error {
 		if runCancel != nil {
 			runCancel()
 		}
+		s.saveRoutingState()
 
 		s.homeLifecycleMu.Lock()
 		if supervisor := s.homeSupervisor; supervisor != nil {

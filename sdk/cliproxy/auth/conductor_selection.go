@@ -434,6 +434,14 @@ func (m *Manager) SetSelector(selector Selector) {
 	m.selector = selector
 	m.mu.Unlock()
 	m.attachSelectorLookup(selector)
+	// Carry session bindings over when one affinity selector replaces another
+	// (a routing config change), so threads keep their prompt-cached credentials.
+	if oldAffinity, ok := oldSelector.(*SessionAffinitySelector); ok && oldAffinity.cache != nil {
+		if newAffinity, ok := selector.(*SessionAffinitySelector); ok && newAffinity.cache != nil {
+			now := time.Now()
+			newAffinity.cache.Restore(oldAffinity.cache.Export(now), now, nil)
+		}
+	}
 
 	if oldSelector != nil {
 		if stoppable, ok := oldSelector.(StoppableSelector); ok {

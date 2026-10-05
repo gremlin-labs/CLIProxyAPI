@@ -445,3 +445,76 @@ func (c *SessionCache) cleanup() {
 		}
 	}
 }
+
+// SessionPin is a persisted session binding: every identifier alias of one logical
+// session, the credential it is bound to, and when the binding expires.
+type SessionPin struct {
+	Aliases   []string  `json:"aliases"`
+	AuthID    string    `json:"auth_id"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+// Export returns the unexpired bindings, oldest first.
+func (c *SessionCache) Export(now time.Time) []SessionPin {
+	if c == nil {
+		return nil
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.evictionOrder == nil {
+		return nil
+	}
+	pins := make([]SessionPin, 0, len(c.groups))
+	for element := c.evictionOrder.Front(); element != nil; element = element.Next() {
+		primaryKey, _ := element.Value.(string)
+		group, ok := c.groups[primaryKey]
+		if !ok || !now.Before(group.expiresAt) || group.authID == "" {
+			continue
+		}
+		pins = append(pins, SessionPin{
+			Aliases:   append([]string(nil), group.aliases...),
+			AuthID:    group.authID,
+			ExpiresAt: group.expiresAt,
+		})
+	}
+	return pins
+}
+
+// Restore re-installs persisted bindings that have not expired and whose credential
+// is accepted by valid. Identifiers that are already bound are left alone, so live
+// bindings win over restored ones. It returns the number of bindings restored.
+func (c *SessionCache) Restore(pins []SessionPin, now time.Time, valid func(authID string) bool) int {
+	if c == nil {
+		return 0
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.ensureInitializedLocked()
+	restored := 0
+	for _, pin := range pins {
+		if pin.AuthID == "" || !now.Before(pin.ExpiresAt) || (valid != nil && !valid(pin.AuthID)) {
+			continue
+		}
+		aliases := compactSessionAliases(mergeSessionAliases(nil, pin.Aliases...))
+		if len(aliases) == 0 {
+			continue
+		}
+		taken := false
+		for _, alias := range aliases {
+			if entry, ok := c.entries[alias]; ok && now.Before(entry.expiresAt) {
+				taken = true
+				break
+			}
+		}
+		if taken {
+			continue
+		}
+		expiresAt := pin.ExpiresAt
+		if limit := now.Add(c.ttl); expiresAt.After(limit) {
+			expiresAt = limit
+		}
+		c.replaceAliasGroupsLocked(pin.AuthID, expiresAt, aliases)
+		restored++
+	}
+	return restored
+}
