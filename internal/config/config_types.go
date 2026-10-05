@@ -321,6 +321,10 @@ type RemoteManagement struct {
 	AllowRemote bool `yaml:"allow-remote"`
 	// SecretKey is the management key (plaintext or bcrypt hashed). YAML key intentionally 'secret-key'.
 	SecretKey string `yaml:"secret-key"`
+	// LocalWithoutKey enables the management API without a key for requests from this
+	// machine when no secret-key is set. Browser requests are accepted only from a
+	// localhost page, so other websites cannot reach it. Remote access always needs a key.
+	LocalWithoutKey bool `yaml:"local-without-key"`
 	// DisableControlPanel skips serving and syncing the bundled management UI when true.
 	DisableControlPanel bool `yaml:"disable-control-panel"`
 	// DisableAutoUpdatePanel disables automatic periodic background updates of the management panel asset from GitHub.

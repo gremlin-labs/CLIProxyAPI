@@ -77,6 +77,10 @@ management:
   # All management requests (even from localhost) require this key.
   # Leave empty to disable the Management API entirely (404 for /v0/management and /v8/management routes).
   secret-key: ""
+  # Allow management from this machine without a key when secret-key is empty. Browser
+  # requests are only accepted from localhost pages, so other websites cannot use it, and
+  # remote access still needs a key. Only for single-user machines. Default: false.
+  local-without-key: false
 
   # Disable the bundled management control panel asset download and HTTP route when true.
   disable-control-panel: false

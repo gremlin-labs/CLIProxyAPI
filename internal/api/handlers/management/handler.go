@@ -7,6 +7,7 @@ import (
 	"crypto/subtle"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -287,12 +288,50 @@ func (h *Handler) Middleware() gin.HandlerFunc {
 			provided = c.GetHeader("X-Management-Key")
 		}
 
+		if localClient && h.localKeylessAllowed() {
+			if !loopbackOrigin(c.GetHeader("Origin")) {
+				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "keyless management only accepts requests from localhost pages"})
+				return
+			}
+			c.Next()
+			return
+		}
+
 		allowed, statusCode, errMsg := h.AuthenticateManagementKey(clientIP, localClient, provided)
 		if !allowed {
 			c.AbortWithStatusJSON(statusCode, gin.H{"error": errMsg})
 			return
 		}
 		c.Next()
+	}
+}
+
+// localKeylessAllowed reports whether local management requests need no key:
+// local-without-key is on and no key is configured anywhere.
+func (h *Handler) localKeylessAllowed() bool {
+	if h == nil || h.cfg == nil || !h.cfg.RemoteManagement.LocalWithoutKey {
+		return false
+	}
+	return h.cfg.RemoteManagement.SecretKey == "" && h.envSecret == "" && h.localPassword == ""
+}
+
+// loopbackOrigin accepts requests without an Origin (curl, same-origin GETs) and
+// browser requests from a localhost page. Any other website is refused, so a page
+// open in the browser cannot use the keyless management API.
+func loopbackOrigin(origin string) bool {
+	origin = strings.TrimSpace(origin)
+	if origin == "" {
+		return true
+	}
+	parsed, errParse := url.Parse(origin)
+	if errParse != nil {
+		return false
+	}
+	switch strings.ToLower(parsed.Hostname()) {
+	case "localhost", "127.0.0.1", "::1":
+		return parsed.Scheme == "http" || parsed.Scheme == "https"
+	default:
+		return false
 	}
 }
 
