@@ -67,6 +67,15 @@ type Config struct {
 	// UsageStatisticsEnabled toggles in-memory usage aggregation; when false, usage data is discarded.
 	UsageStatisticsEnabled bool `yaml:"usage-statistics-enabled" json:"usage-statistics-enabled"`
 
+	// UsageStorePath is the SQLite path for durable request monitoring events and model prices.
+	// Absolute paths are kept. Relative paths resolve under WRITABLE_PATH when set, otherwise
+	// next to the config file. Default: usage.db.
+	UsageStorePath string `yaml:"usage-store-path,omitempty" json:"usage-store-path,omitempty"`
+
+	// UsageRetentionDays controls how long durable usage events are kept.
+	// Default: 90. Set to 0 to use the default.
+	UsageRetentionDays int `yaml:"usage-retention-days,omitempty" json:"usage-retention-days,omitempty"`
+
 	// RedisUsageQueueRetentionSeconds controls how long usage queue items are retained
 	// in memory for Management API consumers.
 	// Default: 60. Max: 3600.
