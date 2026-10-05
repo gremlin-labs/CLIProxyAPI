@@ -3,6 +3,8 @@ package openai
 import (
 	"reflect"
 	"testing"
+
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
 )
 
 func TestOpenAIModelCapabilityMetadataUsesCatalog(t *testing.T) {
@@ -42,6 +44,32 @@ func TestOpenAIModelCapabilityMetadataPrefersConfiguredContext(t *testing.T) {
 	})
 	if got["context_window"] != 400000 {
 		t.Fatalf("context_window = %v, want the configured 400000 override", got["context_window"])
+	}
+}
+
+func TestOpenAIModelCapabilityMetadataAppliesModelContextOverride(t *testing.T) {
+	registry.SetModelContextOverrides(map[string]registry.ModelContextOverride{
+		"my-provider/custom-llm": {ContextLength: 262144},
+		"claude-opus-4-6":        {ContextLength: 300000},
+	})
+	t.Cleanup(func() { registry.SetModelContextOverrides(nil) })
+
+	// A model the catalog misses gains a window from the override.
+	got := openAIModelCapabilityMetadata(map[string]any{"id": "My-Provider/Custom-LLM"})
+	if got["context_window"] != 262144 || got["max_context_window"] != 262144 {
+		t.Fatalf("context window = %v/%v, want the 262144 override", got["context_window"], got["max_context_window"])
+	}
+
+	// The operator override wins over a per-key max_context_length.
+	got = openAIModelCapabilityMetadata(map[string]any{
+		"id":                 "claude-opus-4-6",
+		"max_context_length": 400000,
+	})
+	if got["context_window"] != 300000 {
+		t.Fatalf("context_window = %v, want the 300000 override", got["context_window"])
+	}
+	if _, ok := got["supported_reasoning_levels"]; !ok {
+		t.Fatalf("override dropped catalog reasoning levels: %v", got)
 	}
 }
 

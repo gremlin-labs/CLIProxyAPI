@@ -168,6 +168,9 @@ func (s *Service) applyConfigRuntime(ctx context.Context, commit configCommit, s
 		return false
 	}
 
+	// Refresh manual context window overrides before model listings are rebuilt.
+	applyModelContextOverrides(cfg)
+
 	if !s.applyManagerConfig(ctx, commit) {
 		return false
 	}

@@ -19,8 +19,15 @@ func openAIModelCapabilityMetadata(model map[string]any) map[string]any {
 	}
 	info := registry.LookupModelInfo(modelID)
 
-	// A configured max_context_length override wins over the catalog context length.
-	contextWindow := positiveInt(model["max_context_length"])
+	// An operator model-context override wins, then a configured max_context_length,
+	// then the catalog context length.
+	contextWindow := 0
+	if override, ok := registry.LookupModelContextOverride(modelID); ok {
+		contextWindow = override.ContextLength
+	}
+	if contextWindow == 0 {
+		contextWindow = positiveInt(model["max_context_length"])
+	}
 	if contextWindow == 0 {
 		contextWindow = positiveInt(model["context_length"])
 	}

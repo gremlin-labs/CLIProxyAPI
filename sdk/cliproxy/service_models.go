@@ -1196,3 +1196,24 @@ func applyOAuthSettingEntries(settings []config.OAuthModelSetting, models []*Mod
 	}
 	return out
 }
+
+// applyModelContextOverrides publishes the configured manual context windows to
+// the model registry so listings advertise them for models the catalog misses.
+func applyModelContextOverrides(cfg *config.Config) {
+	if cfg == nil {
+		registry.SetModelContextOverrides(nil)
+		return
+	}
+	overrides := make(map[string]registry.ModelContextOverride, len(cfg.ModelContextOverrides))
+	for _, override := range cfg.ModelContextOverrides {
+		key := registry.NormalizeModelOverrideKey(override.Model)
+		if key == "" {
+			continue
+		}
+		overrides[key] = registry.ModelContextOverride{
+			ContextLength:       override.ContextLength,
+			MaxCompletionTokens: override.MaxCompletionTokens,
+		}
+	}
+	registry.SetModelContextOverrides(overrides)
+}
