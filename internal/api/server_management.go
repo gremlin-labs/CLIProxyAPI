@@ -32,6 +32,7 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.GET("/config.yaml", s.mgmt.GetConfigYAML)
 		mgmt.PUT("/config.yaml", s.mgmt.PutConfigYAML)
 		mgmt.GET("/latest-version", s.mgmt.GetLatestVersion)
+		mgmt.POST("/management-html/install", s.installLatestManagementHTML)
 		mgmt.GET("/plugins", s.mgmt.ListPlugins)
 		mgmt.GET("/plugin-store", s.mgmt.ListPluginStore)
 		mgmt.POST("/plugin-store/:id/install", s.mgmt.InstallPluginFromStore)
@@ -74,6 +75,7 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.DELETE("/proxy-url", s.mgmt.DeleteProxyURL)
 
 		mgmt.POST("/api-call", s.mgmt.APICall)
+		mgmt.POST("/playground/chat", s.playgroundChat)
 
 		mgmt.GET("/quota-exceeded/switch-project", s.mgmt.GetSwitchProject)
 		mgmt.PUT("/quota-exceeded/switch-project", s.mgmt.PutSwitchProject)
@@ -83,6 +85,8 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.PUT("/quota-exceeded/switch-preview-model", s.mgmt.PutSwitchPreviewModel)
 		mgmt.PATCH("/quota-exceeded/switch-preview-model", s.mgmt.PutSwitchPreviewModel)
 		mgmt.POST("/reset-quota", s.mgmt.ResetQuota)
+		mgmt.POST("/codex-quota-recovery/begin", s.mgmt.BeginCodexQuotaRecovery)
+		mgmt.POST("/codex-quota-recovery", s.mgmt.RecoverCodexQuota)
 
 		mgmt.GET("/quota/providers", s.mgmt.GetQuotaProviders)
 		mgmt.POST("/quota/fetch", s.mgmt.FetchCredentialQuota)
@@ -339,6 +343,32 @@ func (s *Server) pluginResourceNoRoute(c *gin.Context) {
 		return
 	}
 	c.AbortWithStatus(http.StatusNotFound)
+}
+
+// installManagementHTML is swapped in tests to avoid network access.
+var installManagementHTML = managementasset.InstallLatestManagementHTML
+
+// installLatestManagementHTML downloads the latest panel release on request. It runs even when
+// disable-auto-update-panel is set: that flag only stops periodic background updates.
+func (s *Server) installLatestManagementHTML(c *gin.Context) {
+	cfg := s.cfg
+	if cfg == nil || cfg.Home.Enabled || cfg.RemoteManagement.DisableControlPanel {
+		c.AbortWithStatus(http.StatusNotFound)
+		return
+	}
+
+	if errInstall := installManagementHTML(
+		c.Request.Context(),
+		managementasset.StaticDir(s.configFilePath),
+		cfg.ProxyURL,
+		cfg.RemoteManagement.PanelGitHubRepository,
+	); errInstall != nil {
+		log.WithError(errInstall).Warn("failed to install latest management asset")
+		c.JSON(http.StatusBadGateway, gin.H{"error": "management asset install failed", "message": errInstall.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
 func (s *Server) serveManagementControlPanel(c *gin.Context) {

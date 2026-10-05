@@ -744,6 +744,12 @@ func (h *Handler) buildAuthFileEntryLocked(auth *coreauth.Auth, quotaSupported .
 	if claims := extractCodexIDTokenClaims(auth); claims != nil {
 		entry["id_token"] = claims
 	}
+	if planType := authCodexPlanType(auth); planType != "" {
+		entry["plan_type"] = planType
+	}
+	if reason := authMetadataString(auth, "disabled_reason"); reason != "" {
+		entry["disabled_reason"] = reason
+	}
 	// Expose priority from Attributes (set by synthesizer from JSON "priority" field).
 	// Fall back to Metadata for auths registered via UploadAuthFile (no synthesizer).
 	if p := strings.TrimSpace(authAttribute(auth, "priority")); p != "" {
@@ -902,6 +908,36 @@ func authProjectID(auth *coreauth.Auth) string {
 		}
 	}
 	return ""
+}
+
+// authCodexPlanType resolves a Codex credential's plan from local data only: stored
+// metadata first, then the runtime attribute, then the ID token claims.
+func authCodexPlanType(auth *coreauth.Auth) string {
+	if auth == nil || !strings.EqualFold(strings.TrimSpace(auth.Provider), "codex") {
+		return ""
+	}
+	for _, key := range []string{"plan_type", "chatgpt_plan_type"} {
+		if planType := authMetadataString(auth, key); planType != "" {
+			return planType
+		}
+	}
+	if planType := strings.TrimSpace(authAttribute(auth, "plan_type")); planType != "" {
+		return planType
+	}
+	if claims := extractCodexIDTokenClaims(auth); claims != nil {
+		if planType, _ := claims["plan_type"].(string); strings.TrimSpace(planType) != "" {
+			return strings.TrimSpace(planType)
+		}
+	}
+	return ""
+}
+
+func authMetadataString(auth *coreauth.Auth, key string) string {
+	if auth == nil || auth.Metadata == nil {
+		return ""
+	}
+	value, _ := auth.Metadata[key].(string)
+	return strings.TrimSpace(value)
 }
 
 func extractCodexIDTokenClaims(auth *coreauth.Auth) gin.H {

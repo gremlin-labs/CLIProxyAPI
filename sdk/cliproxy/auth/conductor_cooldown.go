@@ -461,6 +461,21 @@ func dedupeStrings(values []string) []string {
 
 // ResetQuota clears quota/cooldown state for an auth and resumes registry routing.
 func (m *Manager) ResetQuota(ctx context.Context, authID string) (*Auth, []string, error) {
+	return m.resetQuota(ctx, authID, false, time.Time{})
+}
+
+// ResetQuotaUsageLimitBefore clears only the quota (usage-limit) cooldowns of a Codex auth
+// that were recorded at or before observedAt. Callers use it after a quota check observed at
+// observedAt shows the account has quota again, so a newer failure is never cleared. Other
+// failures, such as authentication errors, are kept. It only changes local routing state.
+func (m *Manager) ResetQuotaUsageLimitBefore(ctx context.Context, authID string, observedAt time.Time) (*Auth, []string, error) {
+	if observedAt.IsZero() {
+		return nil, nil, fmt.Errorf("observed time is required")
+	}
+	return m.resetQuota(ctx, authID, true, observedAt)
+}
+
+func (m *Manager) resetQuota(ctx context.Context, authID string, usageLimitOnly bool, observedAt time.Time) (*Auth, []string, error) {
 	if m == nil {
 		return nil, nil, nil
 	}
@@ -484,31 +499,40 @@ func (m *Manager) ResetQuota(ctx context.Context, authID string) (*Auth, []strin
 		return nil, nil, nil
 	}
 
+	if usageLimitOnly && !strings.EqualFold(strings.TrimSpace(auth.Provider), "codex") {
+		m.mu.Unlock()
+		return nil, nil, fmt.Errorf("usage-limit recovery requires a codex auth")
+	}
+
 	var cooldownRecordsBefore []CooldownStateRecord
 	trackCooldownState := m.cooldownStore != nil
 	if trackCooldownState {
 		cooldownRecordsBefore = m.cooldownStateRecordsForAuthLocked(auth, now)
 	}
 
-	for modelKey, state := range auth.ModelStates {
-		if strings.TrimSpace(modelKey) == "" {
-			continue
+	if usageLimitOnly {
+		models = resetUsageLimitStatesBefore(auth, observedAt, now)
+	} else {
+		for modelKey, state := range auth.ModelStates {
+			if strings.TrimSpace(modelKey) == "" {
+				continue
+			}
+			models = append(models, modelKey)
+			if state != nil {
+				resetModelState(state, now)
+			}
 		}
-		models = append(models, modelKey)
-		if state != nil {
-			resetModelState(state, now)
+		if clearCooldownStateForAuth(auth, now) {
+			if len(models) == 0 {
+				models = append(models, registeredModels...)
+			}
+		} else if len(auth.ModelStates) > 0 {
+			updateAggregatedAvailability(auth, now)
 		}
-	}
-	if clearCooldownStateForAuth(auth, now) {
+
 		if len(models) == 0 {
 			models = append(models, registeredModels...)
 		}
-	} else if len(auth.ModelStates) > 0 {
-		updateAggregatedAvailability(auth, now)
-	}
-
-	if len(models) == 0 {
-		models = append(models, registeredModels...)
 	}
 	models = dedupeStrings(models)
 
@@ -554,6 +578,62 @@ func (m *Manager) ResetQuota(ctx context.Context, authID string) (*Auth, []strin
 		return nil, nil, errPersist
 	}
 	return snapshot, models, nil
+}
+
+// resetUsageLimitStatesBefore clears quota cooldowns recorded at or before observedAt and
+// returns the model keys it cleared. Non-quota failures stay in place.
+func resetUsageLimitStatesBefore(auth *Auth, observedAt, now time.Time) []string {
+	models := make([]string, 0)
+	for modelKey, state := range auth.ModelStates {
+		if strings.TrimSpace(modelKey) == "" || !isUsageLimitModelState(state) {
+			continue
+		}
+		if state.UpdatedAt.After(observedAt) {
+			continue
+		}
+		resetModelState(state, now)
+		models = append(models, modelKey)
+	}
+	if auth.Quota.Exceeded && auth.Quota.Reason == "credential_quota" && !hasUsageLimitModelState(auth) {
+		if len(models) > 0 || (len(auth.ModelStates) == 0 && !auth.UpdatedAt.After(observedAt)) {
+			auth.Unavailable = false
+			auth.NextRetryAfter = time.Time{}
+			applyCooldownFields(&auth.Quota, QuotaState{})
+		}
+	}
+	if len(auth.ModelStates) > 0 {
+		updateAggregatedAvailability(auth, now)
+	}
+	return models
+}
+
+func hasUsageLimitModelState(auth *Auth) bool {
+	for _, state := range auth.ModelStates {
+		if isUsageLimitModelState(state) {
+			return true
+		}
+	}
+	return false
+}
+
+// isUsageLimitModelState reports whether a model state is cooling down because of a
+// quota or usage-limit refusal rather than another failure.
+func isUsageLimitModelState(state *ModelState) bool {
+	if state == nil {
+		return false
+	}
+	if state.Quota.Exceeded && (state.Quota.Reason == "quota" || state.Quota.Reason == "credential_quota") {
+		return true
+	}
+	if isUsageLimitText(state.StatusMessage) {
+		return true
+	}
+	return state.LastError != nil && isUsageLimitText(state.LastError.Message+" "+state.LastError.Code)
+}
+
+func isUsageLimitText(text string) bool {
+	text = strings.ToLower(text)
+	return strings.Contains(text, "usage_limit_reached") || strings.Contains(text, "usage limit")
 }
 
 func modelsForRegisteredAuth(authID string) []string {
