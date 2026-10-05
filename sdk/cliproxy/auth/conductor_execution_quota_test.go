@@ -230,7 +230,7 @@ func TestApplyRequestAfterAuthInterceptorSessionClearing(t *testing.T) {
 		},
 	}
 
-	finalReq, finalOpts, err := applyRequestAfterAuthInterceptor(context.Background(), nil, "openai", req, opts, "gpt-5.6-luna")
+	finalReq, finalOpts, err := applyRequestAfterAuthInterceptor(context.Background(), nil, nil, "openai", req, opts, "gpt-5.6-luna")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -303,7 +303,7 @@ func TestApplyRequestAfterAuthInterceptorPreservesOriginalRequestSessionOnUnrela
 		},
 	}
 
-	_, finalOpts, err := applyRequestAfterAuthInterceptor(context.Background(), nil, "openai", req, opts, "gpt-5.6-luna")
+	_, finalOpts, err := applyRequestAfterAuthInterceptor(context.Background(), nil, nil, "openai", req, opts, "gpt-5.6-luna")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -334,7 +334,7 @@ func TestApplyRequestAfterAuthInterceptorPreservesLCPHierarchyOnUnrelatedHeaderC
 		},
 	}
 
-	_, finalOpts, err := applyRequestAfterAuthInterceptor(context.Background(), nil, "openai", req, opts, "gpt-5.6-luna")
+	_, finalOpts, err := applyRequestAfterAuthInterceptor(context.Background(), nil, nil, "openai", req, opts, "gpt-5.6-luna")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -371,7 +371,7 @@ func TestApplyRequestAfterAuthInterceptor_OverridesPath_Issue6196(t *testing.T) 
 		},
 	}
 
-	finalReq, finalOpts, err := applyRequestAfterAuthInterceptor(context.Background(), nil, "openai-compatibility", req, opts, "gpt-image-2.5")
+	finalReq, finalOpts, err := applyRequestAfterAuthInterceptor(context.Background(), nil, nil, "openai-compatibility", req, opts, "gpt-image-2.5")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -380,5 +380,27 @@ func TestApplyRequestAfterAuthInterceptor_OverridesPath_Issue6196(t *testing.T) 
 	}
 	if gotPath := finalOpts.Metadata[cliproxyexecutor.RequestPathMetadataKey]; gotPath != "/v1/images/generations" {
 		t.Fatalf("final request path = %v, want /v1/images/generations", gotPath)
+	}
+}
+
+func TestApplyRequestAfterAuthInterceptorPassesSelectedCredential(t *testing.T) {
+	var seen cliproxyexecutor.RequestAfterAuthInterceptRequest
+	opts := cliproxyexecutor.Options{
+		RequestAfterAuthInterceptor: func(ctx context.Context, req cliproxyexecutor.RequestAfterAuthInterceptRequest) cliproxyexecutor.RequestAfterAuthInterceptResponse {
+			seen = req
+			return cliproxyexecutor.RequestAfterAuthInterceptResponse{Body: []byte(`{"input":"{{EMAIL_abcdef}}"}`)}
+		},
+	}
+	auth := &Auth{ID: "codex-1", Provider: "codex", Attributes: map[string]string{AttributeAuthKind: AuthKindOAuth}}
+	req := cliproxyexecutor.Request{Model: "gpt-5", Payload: []byte(`{"input":"a@example.com"}`)}
+	finalReq, finalOpts, err := applyRequestAfterAuthInterceptor(context.Background(), nil, auth, "", req, opts, "gpt-5")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if seen.Provider != "codex" || seen.AuthKind != AuthKindOAuth || seen.AuthID != "codex-1" {
+		t.Fatalf("selected credential not passed: provider=%q kind=%q id=%q", seen.Provider, seen.AuthKind, seen.AuthID)
+	}
+	if string(finalReq.Payload) != `{"input":"{{EMAIL_abcdef}}"}` || string(finalOpts.OriginalRequest) != string(finalReq.Payload) {
+		t.Fatalf("interceptor body must replace the payload handed to the executor: %s", finalReq.Payload)
 	}
 }

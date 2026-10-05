@@ -248,6 +248,31 @@ requests:
   #   keepalive-seconds: 15   # Default: 0 (disabled). <= 0 disables keep-alives.
   #   bootstrap-retries: 1    # Default: 0 (disabled). Retries before first byte is sent.
 
+  # Privacy (desensitization): reversibly mask secrets/PII in client request bodies
+  # before they leave the proxy, replacing them with {{CATEGORY_xxxxxx}} placeholders,
+  # and restore placeholders in responses. Masking runs before translation, so
+  # payload rules below still apply last. Disabled by default.
+  # desensitization:
+  #   enabled: false
+  #   scope: all              # all | targeted (OR of api_keys, oauth_providers, api_providers)
+  #   api_keys: []            # inbound client keys from access.api-keys
+  #   oauth_providers: []     # e.g. claude, codex
+  #   api_providers: []       # e.g. claude, codex, openai-compatibility name
+  #   restore: true           # restore placeholders in non-stream and SSE responses
+  #   restore_secrets: false  # also restore API keys / PEM / tokens / JWTs / connection strings
+  #   fail_closed: false      # true = reject with 502 when masking JSON fails
+  #   session_ttl_minutes: 20 # in-memory placeholder mapping TTL (sliding)
+  #   categories:             # defaults: api_key, token, private_key, connstr, email, phone, idcard on; rest off
+  #     card: false
+  #     jwt: false
+  #     ip_private: false
+  #   custom_terms: []        # - { value: "AcmeCorp", category: "TERM", whole_word: true }
+  #   custom_regex: []        # - { pattern: "EMP-\\d{6}", category: "EMPLOYEE" }
+  #   secret_prefixes: ["sk-", "sk-ant-", "ghp_", "github_pat_", "glpat-", "AKIA"]
+  #   allowlist: []           # exact values never masked
+  #   skip_models: []
+  #   skip_formats: []        # source formats, e.g. gemini
+
   # Optional payload configuration
   # payload:
   #   default: # Default rules only set parameters when they are missing in the payload.

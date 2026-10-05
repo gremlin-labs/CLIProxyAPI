@@ -154,6 +154,12 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.PUT("/routing/strategy", s.mgmt.PutRoutingStrategy)
 		mgmt.PATCH("/routing/strategy", s.mgmt.PutRoutingStrategy)
 
+		mgmt.GET("/desensitization-config", s.mgmt.GetDesensitizationConfig)
+		mgmt.PUT("/desensitization-config", s.mgmt.PutDesensitizationConfig)
+		mgmt.PATCH("/desensitization-config", s.mgmt.PutDesensitizationConfig)
+		mgmt.GET("/desensitization/scope-options", s.mgmt.GetDesensitizationScopeOptions)
+		mgmt.POST("/desensitization/preview", s.mgmt.PreviewDesensitization)
+
 		mgmt.GET("/claude-api-key", s.mgmt.GetClaudeKeys)
 		mgmt.PUT("/claude-api-key", s.mgmt.PutClaudeKeys)
 		mgmt.PATCH("/claude-api-key", s.mgmt.PatchClaudeKey)

@@ -29,6 +29,9 @@ func (s *Server) registerManagementV8Routes() {
 
 	v8.GET("/server/latest-version", s.mgmt.GetLatestVersion)
 	v8.POST("/requests/api-call", s.mgmt.APICall)
+	// Privacy: config lives at /config/requests/desensitization; these are its helpers.
+	v8.GET("/requests/desensitization/scope-options", s.mgmt.GetDesensitizationScopeOptions)
+	v8.POST("/requests/desensitization/preview", s.mgmt.PreviewDesensitization)
 	v8.POST("/routing/cooldown/reset", s.mgmt.ResetQuota)
 	v8.GET("/routing/model-definitions/:channel", s.mgmt.GetStaticModelDefinitions)
 	v8.GET("/routing/model-sources", s.mgmt.GetModelSources)

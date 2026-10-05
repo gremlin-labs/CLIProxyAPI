@@ -151,6 +151,10 @@ type Config struct {
 	// Codex configures provider-wide Codex request behavior.
 	Codex CodexConfig `yaml:"codex" json:"codex"`
 
+	// Desensitization configures reversible PII/secret masking of request bodies
+	// before they are sent upstream (Privacy). Disabled by default.
+	Desensitization DesensitizationConfig `yaml:"desensitization,omitempty" json:"desensitization"`
+
 	// CodexHeaderDefaults configures fallback headers for Codex OAuth model requests.
 	// These are used only when the client does not send its own headers.
 	CodexHeaderDefaults CodexHeaderDefaults `yaml:"codex-header-defaults" json:"codex-header-defaults"`
