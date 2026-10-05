@@ -217,7 +217,7 @@ type CodexConfig struct {
 	// ResponseSteering enables full-duplex Codex WebSockets, bound to one
 	// upstream model/account/socket for their entire lifetime. Default is false.
 	ResponseSteering bool `yaml:"response-steering" json:"response-steering"`
-	// Instructions configures private Codex instruction injection and routing.
+	// Instructions configures operator instructions merged into Codex requests.
 	Instructions CodexInstructionsConfig `yaml:"instructions,omitempty" json:"instructions,omitempty"`
 	// Routing holds Codex-specific credential routing preferences.
 	Routing CodexRoutingConfig `yaml:"routing,omitempty" json:"routing,omitempty"`
@@ -681,9 +681,6 @@ type CodexKey struct {
 
 	// AlphaSearch allows this Codex API key to serve the Alpha Search endpoint.
 	AlphaSearch bool `yaml:"alpha-search,omitempty" json:"alpha-search,omitempty"`
-
-	// AllowPrivateInstructions marks this Codex API key for private instruction requests.
-	AllowPrivateInstructions bool `yaml:"allow-private-instructions,omitempty" json:"allow_private_instructions,omitempty"`
 
 	// ProxyURL overrides the global proxy setting for this API key if provided.
 	ProxyURL string `yaml:"proxy-url" json:"proxy-url"`

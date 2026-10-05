@@ -27,9 +27,10 @@ func TestCodexInstructionsRoundTrip(t *testing.T) {
 	path := writeTestConfigFile(t)
 	h := &Handler{cfg: cfg, configFilePath: path}
 
+	// The panel still sends the removed marker/segregation fields; they are ignored.
 	rec := serveCodexConfig(t, h.PutCodexInstructions, http.MethodPut, `{
 		"enabled": true, "mode": " Append ", "content": "Be terse.", "file": "",
-		"models": [" gpt-5.5 ", ""], "oauth-only": true, "require-auth-allow": false,
+		"models": [" gpt-5.5 ", ""], "oauth-only": false, "require-auth-allow": false,
 		"reserve-marked-auths": true, "use-prefix-suffix": true,
 		"request-markers": {"prefixes": ["private/"], "suffixes": []}
 	}`)
@@ -37,25 +38,24 @@ func TestCodexInstructionsRoundTrip(t *testing.T) {
 		t.Fatalf("PUT status = %d, body=%s", rec.Code, rec.Body.String())
 	}
 	got := cfg.Codex.Instructions
-	if !got.Enabled || got.Mode != "append" || got.Content != "Be terse." || len(got.Models) != 1 || got.Models[0] != "gpt-5.5" {
+	if !got.Enabled || got.Mode != "append" || got.Content != "Be terse." || len(got.Models) != 1 || got.Models[0] != "gpt-5.5" || got.OAuthOnlyEnabled() {
 		t.Fatalf("stored instructions = %+v", got)
-	}
-	if got.RequireAuthAllowEnabled() || !got.ReserveMarkedAuths || got.RequestMarkers.Suffixes == nil || len(got.RequestMarkers.Suffixes) != 0 {
-		t.Fatalf("stored instructions flags = %+v", got)
 	}
 
 	saved, errRead := os.ReadFile(path)
 	if errRead != nil {
 		t.Fatalf("read saved config: %v", errRead)
 	}
-	if !strings.Contains(string(saved), "Be terse.") {
-		t.Fatalf("saved config does not contain the instructions:\n%s", saved)
+	for _, removed := range []string{"request-markers", "reserve-marked-auths", "require-auth-allow", "use-prefix-suffix", "private/"} {
+		if strings.Contains(string(saved), removed) {
+			t.Fatalf("saved config contains removed field %q:\n%s", removed, saved)
+		}
 	}
 	reloaded, errLoad := config.LoadConfig(path)
 	if errLoad != nil {
 		t.Fatalf("reload saved config: %v", errLoad)
 	}
-	if reloaded.Codex.Instructions.Content != "Be terse." || !reloaded.Codex.Instructions.ReserveMarkedAuths {
+	if reloaded.Codex.Instructions.Content != "Be terse." || reloaded.Codex.Instructions.Mode != "append" {
 		t.Fatalf("reloaded instructions = %+v\nsaved:\n%s", reloaded.Codex.Instructions, saved)
 	}
 
@@ -64,8 +64,13 @@ func TestCodexInstructionsRoundTrip(t *testing.T) {
 	if errDecode := json.Unmarshal(rec.Body.Bytes(), &body); errDecode != nil {
 		t.Fatalf("decode GET body: %v", errDecode)
 	}
-	if body["mode"] != "append" || body["require-auth-allow"] != false || body["reserve-marked-auths"] != true {
+	if body["mode"] != "append" || body["oauth-only"] != false {
 		t.Fatalf("GET body = %v", body)
+	}
+	for _, removed := range []string{"request-markers", "reserve-marked-auths", "require-auth-allow", "use-prefix-suffix"} {
+		if _, ok := body[removed]; ok {
+			t.Fatalf("GET body returns removed field %q: %v", removed, body)
+		}
 	}
 }
 
@@ -139,19 +144,5 @@ func TestCodexFailureConfigDefaultsAndPartialUpdate(t *testing.T) {
 	policy = cfg.Codex.FailurePolicy()
 	if !policy.AutoDisableAuthFailures || policy.UsageLimitCooldownFallbackHours != 2 || !cfg.Codex.ResponseSteering {
 		t.Fatalf("partial update lost settings: policy=%+v steering=%v", policy, cfg.Codex.ResponseSteering)
-	}
-}
-
-func TestPatchCodexKeyUpdatesAllowPrivateInstructions(t *testing.T) {
-	h := &Handler{
-		cfg:            &config.Config{CodexKey: []config.CodexKey{{APIKey: "codex-key", BaseURL: "https://codex.example.com"}}},
-		configFilePath: writeTestConfigFile(t),
-	}
-	rec := serveCodexConfig(t, h.PatchCodexKey, http.MethodPatch, `{"index":0,"value":{"allow_private_instructions":true}}`)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
-	}
-	if !h.cfg.CodexKey[0].AllowPrivateInstructions {
-		t.Fatal("allow_private_instructions not stored on the codex api key")
 	}
 }

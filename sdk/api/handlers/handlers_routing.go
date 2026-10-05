@@ -180,12 +180,6 @@ func (h *BaseAPIHandler) getRequestDetailsWithOptions(modelName string, allowIma
 
 	parsed := thinking.ParseSuffix(resolvedModelName)
 	baseModel := strings.TrimSpace(parsed.ModelName)
-	// Private-instruction markers (e.g. "private/") are virtual model ids; resolve the
-	// provider from the real model. The marker stays in resolvedModelName so private mode
-	// is still detected when execution metadata is built.
-	if h != nil {
-		baseModel = stripPrivateCodexMarker(h.AuthManager, baseModel)
-	}
 
 	if errMsg := h.validateImageOnlyModel(baseModel, allowImageModel); errMsg != nil {
 		return nil, "", errMsg

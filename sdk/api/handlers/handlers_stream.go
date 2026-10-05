@@ -310,8 +310,7 @@ func (h *BaseAPIHandler) executeStreamWithAuthManagerFormats(ctx context.Context
 		reqMeta[coreexecutor.RequestPathMetadataKey] = execOptions.Path
 	}
 	reqMeta[coreexecutor.RequestedModelMetadataKey] = originalRequestedModel
-	addAuthSelectionModelMetadata(reqMeta, stripPrivateCodexMarker(h.AuthManager, execOptions.AuthSelectionModel))
-	normalizedModel = applyPrivateCodexInstructionModel(h.AuthManager, normalizedModel, reqMeta)
+	addAuthSelectionModelMetadata(reqMeta, execOptions.AuthSelectionModel)
 	addModelExecutionSourceMetadata(reqMeta, execOptions.InternalSource)
 	setReasoningEffortMetadata(reqMeta, entryProtocol, normalizedModel, rawJSON)
 	setServiceTierMetadata(reqMeta, rawJSON)

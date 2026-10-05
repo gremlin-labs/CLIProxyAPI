@@ -7,7 +7,6 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/router-for-me/CLIProxyAPI/v8/internal/codexinstructions"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
@@ -15,7 +14,7 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-func codexPrivateInstructionsServer(t *testing.T, gotBody *[]byte) *httptest.Server {
+func codexConfiguredInstructionsServer(t *testing.T, gotBody *[]byte) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
@@ -25,28 +24,26 @@ func codexPrivateInstructionsServer(t *testing.T, gotBody *[]byte) *httptest.Ser
 	}))
 }
 
-func codexPrivateInstructionsAuth(baseURL string) *cliproxyauth.Auth {
+func codexConfiguredInstructionsAuth(baseURL string) *cliproxyauth.Auth {
 	return &cliproxyauth.Auth{
 		Provider:   "codex",
 		Attributes: map[string]string{"base_url": baseURL},
 		Metadata: map[string]any{
 			"type": "codex", "access_token": "oauth-token", "account_id": "acct",
-			codexinstructions.AuthMetadataKey: true,
 		},
 	}
 }
 
-func executeCodexPrivateInstructions(t *testing.T, cfg *config.Config, meta map[string]any) []byte {
+func executeCodexConfiguredInstructions(t *testing.T, cfg *config.Config) []byte {
 	t.Helper()
 	var gotBody []byte
-	server := codexPrivateInstructionsServer(t, &gotBody)
+	server := codexConfiguredInstructionsServer(t, &gotBody)
 	defer server.Close()
-	_, err := NewCodexExecutor(cfg).Execute(context.Background(), codexPrivateInstructionsAuth(server.URL), cliproxyexecutor.Request{
+	_, err := NewCodexExecutor(cfg).Execute(context.Background(), codexConfiguredInstructionsAuth(server.URL), cliproxyexecutor.Request{
 		Model:   "gpt-5.5",
 		Payload: []byte(`{"model":"gpt-5.5","instructions":"CLIENT","input":"hello"}`),
 	}, cliproxyexecutor.Options{
 		SourceFormat: sdktranslator.FromString("openai-response"),
-		Metadata:     meta,
 	})
 	if err != nil {
 		t.Fatalf("Execute error: %v", err)
@@ -54,38 +51,39 @@ func executeCodexPrivateInstructions(t *testing.T, cfg *config.Config, meta map[
 	return gotBody
 }
 
-func privateInstructionsExecutorConfig() *config.Config {
+func configuredInstructionsExecutorConfig() *config.Config {
 	return &config.Config{
 		SDKConfig: config.SDKConfig{DisableImageGeneration: config.DisableImageGenerationAll},
 		Codex: config.CodexConfig{Instructions: config.CodexInstructionsConfig{
 			Enabled: true,
-			Content: "PRIVATE",
+			Content: "EXTRA",
 		}},
 	}
 }
 
-func TestCodexExecutorInjectsPrivateInstructions(t *testing.T) {
-	cfg := privateInstructionsExecutorConfig()
-	body := executeCodexPrivateInstructions(t, cfg, map[string]any{codexinstructions.RequestPrivateMetadataKey: true})
-	if got := gjson.GetBytes(body, "instructions").String(); got != "PRIVATE\n\nCLIENT" {
-		t.Fatalf("instructions = %q, want private instructions prepended", got)
+func TestCodexExecutorInjectsConfiguredInstructions(t *testing.T) {
+	cfg := configuredInstructionsExecutorConfig()
+	body := executeCodexConfiguredInstructions(t, cfg)
+	if got := gjson.GetBytes(body, "instructions").String(); got != "EXTRA\n\nCLIENT" {
+		t.Fatalf("instructions = %q, want configured instructions prepended", got)
 	}
 
-	body = executeCodexPrivateInstructions(t, cfg, nil)
+	cfg.Codex.Instructions.Enabled = false
+	body = executeCodexConfiguredInstructions(t, cfg)
 	if got := gjson.GetBytes(body, "instructions").String(); got != "CLIENT" {
-		t.Fatalf("non-private instructions = %q, want unchanged", got)
+		t.Fatalf("disabled instructions = %q, want unchanged", got)
 	}
 }
 
 // Payload rules stay the final barrier: an override of instructions wins over the
-// injected private instructions.
-func TestCodexExecutorPayloadOverrideWinsOverPrivateInstructions(t *testing.T) {
-	cfg := privateInstructionsExecutorConfig()
+// injected configured instructions.
+func TestCodexExecutorPayloadOverrideWinsOverConfiguredInstructions(t *testing.T) {
+	cfg := configuredInstructionsExecutorConfig()
 	cfg.Payload = config.PayloadConfig{Override: []config.PayloadRule{{
 		Models: []config.PayloadModelRule{{Name: "gpt-5.5"}},
 		Params: map[string]any{"instructions": "OVERRIDE"},
 	}}}
-	body := executeCodexPrivateInstructions(t, cfg, map[string]any{codexinstructions.RequestPrivateMetadataKey: true})
+	body := executeCodexConfiguredInstructions(t, cfg)
 	if got := gjson.GetBytes(body, "instructions").String(); got != "OVERRIDE" {
 		t.Fatalf("instructions = %q, want payload override", got)
 	}

@@ -69,7 +69,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 	}
 	body = helps.SetStringIfDifferent(body, "model", baseModel)
 	body = normalizeCodexInstructions(body, preserveNativeOutput)
-	body = helps.ApplyCodexConfiguredInstructions(e.cfg, auth, baseModel, body, opts.Metadata)
+	body = helps.ApplyCodexConfiguredInstructions(e.cfg, auth, baseModel, body)
 	if e.cfg == nil || e.cfg.DisableImageGeneration == config.DisableImageGenerationOff {
 		body = ensureImageGenerationTool(body, baseModel, auth, opts.Headers)
 	}

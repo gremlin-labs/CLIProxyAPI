@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/router-for-me/CLIProxyAPI/v8/internal/codexinstructions"
 	internalconfig "github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 )
@@ -103,44 +102,6 @@ func TestCodexPreferFreeDefaultsOff(t *testing.T) {
 	}
 	if selected == nil || selected.ID != "off-paid" {
 		t.Fatalf("pickNext() auth = %v, want priority winner off-paid", selected)
-	}
-}
-
-func TestCodexPrivateInstructionsSelection(t *testing.T) {
-	model := "codex-private-selection"
-	markedID := "private-marked"
-	plainID := "private-plain"
-	manager := newCodexPolicyTestManager(t, &RoundRobinSelector{}, &internalconfig.Config{}, model,
-		&Auth{ID: markedID, Provider: "codex", Metadata: map[string]any{codexinstructions.AuthMetadataKey: true}},
-		&Auth{ID: plainID, Provider: "codex"},
-	)
-
-	private := cliproxyexecutor.Options{Metadata: map[string]any{
-		codexinstructions.RequestPrivateMetadataKey:          true,
-		codexinstructions.RequestRequireAuthAllowMetadataKey: true,
-	}}
-	for i := 0; i < 4; i++ {
-		selected, _, errPick := manager.pickNext(context.Background(), "codex", model, private, nil)
-		if errPick != nil {
-			t.Fatalf("private pickNext() error = %v", errPick)
-		}
-		if selected == nil || selected.ID != markedID {
-			t.Fatalf("private pickNext() auth = %v, want %q", selected, markedID)
-		}
-	}
-	if _, _, errPick := manager.pickNext(context.Background(), "codex", model, private, map[string]struct{}{markedID: {}}); errPick == nil {
-		t.Fatal("private pickNext() without marked credentials succeeded, want error")
-	}
-
-	reserved := cliproxyexecutor.Options{Metadata: map[string]any{codexinstructions.RequestReserveMarkedAuthsMetadataKey: true}}
-	for i := 0; i < 4; i++ {
-		selected, _, errPick := manager.pickNext(context.Background(), "codex", model, reserved, nil)
-		if errPick != nil {
-			t.Fatalf("reserved pickNext() error = %v", errPick)
-		}
-		if selected == nil || selected.ID != plainID {
-			t.Fatalf("reserved pickNext() auth = %v, want %q", selected, plainID)
-		}
 	}
 }
 

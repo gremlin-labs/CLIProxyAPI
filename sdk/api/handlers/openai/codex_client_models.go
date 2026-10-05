@@ -3,7 +3,6 @@ package openai
 import (
 	codexmodels "github.com/router-for-me/CLIProxyAPI/v8/internal/client/codex/models"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
-	"github.com/router-for-me/CLIProxyAPI/v8/sdk/api/handlers"
 )
 
 func (h *OpenAIAPIHandler) codexClientModelsResponse(clientVersion ...string) map[string]any {
@@ -17,15 +16,7 @@ func (h *OpenAIAPIHandler) codexClientModelsResponse(clientVersion ...string) ma
 		applyPatchCapabilityForModel = h.SupportsApplyPatchModel
 	}
 	modelRegistry := registry.GetGlobalRegistry()
-	// Build from the registry models, then clone catalog entries for private-instruction
-	// marker ids so the variants keep the full template and capability metadata.
-	built := codexmodels.BuildResponseForClientWithToolCapabilities(modelRegistry.GetAvailableModels("openai"), modelRegistry.GetModelProviders, modelRegistry.GetResponsesWebSearchCapability, applyPatchCapabilityForModel, optimizeMultiAgentV2, version)
-	if h != nil && h.BaseAPIHandler != nil {
-		if models, ok := built["models"].([]map[string]any); ok {
-			built["models"] = handlers.ExpandPrivateCodexInstructionModels(h.AuthManager, models, "slug")
-		}
-	}
-	return built
+	return codexmodels.BuildResponseForClientWithToolCapabilities(h.Models(), modelRegistry.GetModelProviders, modelRegistry.GetResponsesWebSearchCapability, applyPatchCapabilityForModel, optimizeMultiAgentV2, version)
 }
 
 // CodexClientModelsResponse builds a Codex client model response.

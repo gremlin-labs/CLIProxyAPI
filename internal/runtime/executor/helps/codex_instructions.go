@@ -4,7 +4,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/router-for-me/CLIProxyAPI/v8/internal/codexinstructions"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	log "github.com/sirupsen/logrus"
@@ -12,41 +11,32 @@ import (
 	"github.com/tidwall/sjson"
 )
 
-// ApplyCodexConfiguredInstructions merges the configured private instructions into a
-// Codex request body. It applies only when private instructions are enabled, the request
-// handler marked the request private, the model is eligible, and the credential passes
-// the OAuth-only and marked-credential checks. Callers must run it before the payload
-// finalizer so user payload rules remain the final barrier.
-func ApplyCodexConfiguredInstructions(cfg *config.Config, auth *cliproxyauth.Auth, model string, body []byte, meta map[string]any) []byte {
+// ApplyCodexConfiguredInstructions merges the operator-configured instructions into a
+// Codex request body. It applies when codex.instructions is enabled, the model matches
+// the configured patterns, and (with oauth-only) the credential is a Codex OAuth login.
+// Callers must run it before the payload finalizer so user payload rules stay the final
+// barrier.
+func ApplyCodexConfiguredInstructions(cfg *config.Config, auth *cliproxyauth.Auth, model string, body []byte) []byte {
 	if cfg == nil || len(body) == 0 {
 		return body
 	}
 	settings := cfg.Codex.Instructions
-	if !settings.Enabled || !codexinstructions.RequestIsPrivate(meta) {
-		return body
-	}
-	if auth == nil {
+	if !settings.Enabled || !settings.MatchesModel(model) {
 		return body
 	}
 	if settings.OAuthOnlyEnabled() && !codexAuthIsOAuth(auth) {
 		return body
 	}
-	if settings.RequireAuthAllowEnabled() && !codexinstructions.AuthAllows(auth.Attributes, auth.Metadata) {
-		return body
-	}
-	if !codexinstructions.ModelMatches(settings.Models, model) {
-		return body
-	}
-	private := strings.TrimSpace(settings.Content)
-	if private == "" && strings.TrimSpace(settings.File) != "" {
+	extra := strings.TrimSpace(settings.Content)
+	if extra == "" && strings.TrimSpace(settings.File) != "" {
 		data, errRead := os.ReadFile(strings.TrimSpace(settings.File))
 		if errRead != nil {
 			log.WithError(errRead).Warn("codex instructions: failed to read instructions file")
 			return body
 		}
-		private = strings.TrimSpace(string(data))
+		extra = strings.TrimSpace(string(data))
 	}
-	if private == "" {
+	if extra == "" {
 		return body
 	}
 
@@ -54,11 +44,11 @@ func ApplyCodexConfiguredInstructions(cfg *config.Config, auth *cliproxyauth.Aut
 	var merged string
 	switch strings.ToLower(strings.TrimSpace(settings.Mode)) {
 	case config.CodexInstructionsModeReplace:
-		merged = private
+		merged = extra
 	case config.CodexInstructionsModeAppend:
-		merged = joinCodexInstructions(current, private)
+		merged = joinCodexInstructions(current, extra)
 	default:
-		merged = joinCodexInstructions(private, current)
+		merged = joinCodexInstructions(extra, current)
 	}
 	out, errSet := sjson.SetBytes(body, "instructions", merged)
 	if errSet != nil {

@@ -76,10 +76,9 @@ type requiredAuthKindContextKey struct{}
 type credentialPolicyContextKey struct{}
 
 type authSelectionEligibility struct {
-	requiredKind        string
-	credentialPolicy    string
-	disallowFreeAuth    bool
-	privateInstructions privateInstructionsPolicy
+	requiredKind     string
+	credentialPolicy string
+	disallowFreeAuth bool
 }
 
 func withRequiredAuthKind(ctx context.Context, requiredKind string) context.Context {
@@ -99,10 +98,7 @@ func credentialPolicyFromContext(ctx context.Context) string {
 }
 
 func authSelectionEligibilityForRequest(ctx context.Context, opts cliproxyexecutor.Options) authSelectionEligibility {
-	eligibility := authSelectionEligibility{
-		disallowFreeAuth:    disallowFreeAuthFromMetadata(opts.Metadata),
-		privateInstructions: privateInstructionsPolicyFromMetadata(opts.Metadata),
-	}
+	eligibility := authSelectionEligibility{disallowFreeAuth: disallowFreeAuthFromMetadata(opts.Metadata)}
 	if ctx != nil {
 		eligibility.requiredKind, _ = ctx.Value(requiredAuthKindContextKey{}).(string)
 		eligibility.credentialPolicy, _ = ctx.Value(credentialPolicyContextKey{}).(string)
@@ -118,9 +114,6 @@ func (e authSelectionEligibility) allows(auth *Auth) bool {
 		return false
 	}
 	if e.credentialPolicy != "" && !credentialPolicyAllows(e.credentialPolicy, auth) {
-		return false
-	}
-	if !e.privateInstructions.allows(auth) {
 		return false
 	}
 	return !e.disallowFreeAuth || !isFreeCodexAuth(auth)

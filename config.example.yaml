@@ -1046,25 +1046,16 @@ oauth:
         #     username: "user"
         #     credential: "secret"
 
-      # Private instructions (management: /v0/management/codex-instructions).
-      # Requests whose model id carries a marker (default prefix "private/", e.g.
-      # "private/gpt-5.5") have the marker stripped, are routed only to Codex credentials
-      # marked allow_private_instructions (auth-file field, or allow-private-instructions on
-      # a codex api-key), and get these instructions merged into the request instructions.
-      # Payload rules still apply last. Marker variants are listed in /v1/models.
+      # Custom instructions (management: /v0/management/codex-instructions).
+      # When enabled, the text is merged into the instructions of every Codex request whose
+      # model matches `models`. Payload rules still apply last.
       # instructions:
       #   enabled: false
-      #   mode: prepend              # prepend | append | replace
-      #   content: ""                # inline text; wins over file
-      #   file: ""                   # local file read when content is empty
-      #   models: ["gpt-5.5", "gpt-5*"]
-      #   oauth-only: true           # inject only on Codex OAuth credentials
-      #   require-auth-allow: true   # private requests use only marked credentials
-      #   reserve-marked-auths: false # keep marked credentials out of normal traffic
-      #   use-prefix-suffix: true    # false: every eligible request is private
-      #   request-markers:
-      #     prefixes: ["private/"]
-      #     suffixes: []
+      #   mode: prepend      # prepend | append | replace
+      #   content: ""        # inline text; wins over file
+      #   file: ""           # local file read when content is empty
+      #   models: []         # glob patterns, e.g. ["gpt-5*"]; empty = all Codex models
+      #   oauth-only: true   # inject only on Codex OAuth credentials
 
       # Codex routing preferences (management: /v0/management/codex-routing-config).
       # routing:

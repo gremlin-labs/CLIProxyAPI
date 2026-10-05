@@ -14,7 +14,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/auth/codex"
-	"github.com/router-for-me/CLIProxyAPI/v8/internal/codexinstructions"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/credentialweight"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
@@ -782,9 +781,6 @@ func (h *Handler) buildAuthFileEntryLocked(auth *coreauth.Auth, quotaSupported .
 	if websockets, ok := authWebsocketsValue(auth); ok {
 		entry["websockets"] = websockets
 	}
-	if allow, ok := authAllowPrivateInstructionsValue(auth); ok {
-		entry[codexinstructions.AuthMetadataKey] = allow
-	}
 	if requestRetry, ok := auth.RequestRetryOverride(); ok {
 		entry["request_retry"] = requestRetry
 	}
@@ -856,20 +852,6 @@ func authWeightValue(auth *coreauth.Auth) (int64, bool) {
 	}
 	weight, errWeight := credentialweight.ParseValue(rawWeight)
 	return weight, errWeight == nil
-}
-
-// authAllowPrivateInstructionsValue reports a Codex credential's private-instructions
-// mark when the attribute or auth-file field is present.
-func authAllowPrivateInstructionsValue(auth *coreauth.Auth) (bool, bool) {
-	if auth == nil || !strings.EqualFold(strings.TrimSpace(auth.Provider), "codex") {
-		return false, false
-	}
-	_, hasAttr := auth.Attributes[codexinstructions.AuthAttributeKey]
-	_, hasMeta := auth.Metadata[codexinstructions.AuthMetadataKey]
-	if !hasAttr && !hasMeta {
-		return false, false
-	}
-	return codexinstructions.AuthAllows(auth.Attributes, auth.Metadata), true
 }
 
 func authWebsocketsValue(auth *coreauth.Auth) (bool, bool) {

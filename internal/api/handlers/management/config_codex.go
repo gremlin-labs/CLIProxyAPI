@@ -7,17 +7,19 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 )
 
-// Codex Config page: private instructions, routing preferences and failure policy.
+// Codex Config page: custom instructions, routing preferences and failure policy.
 // The routes return and accept the provider-wide `codex` settings as flat JSON.
 
-// GetCodexInstructions returns the private Codex instruction settings.
+// GetCodexInstructions returns the custom Codex instruction settings.
 func (h *Handler) GetCodexInstructions(c *gin.Context) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	c.JSON(http.StatusOK, h.cfg.Codex.Instructions)
 }
 
-// PutCodexInstructions replaces the private Codex instruction settings.
+// PutCodexInstructions replaces the custom Codex instruction settings. Fields the
+// panel may still send but this fork does not support (request markers, marked-auth
+// routing) are ignored.
 func (h *Handler) PutCodexInstructions(c *gin.Context) {
 	var body config.CodexInstructionsConfig
 	if errBind := c.ShouldBindJSON(&body); errBind != nil {

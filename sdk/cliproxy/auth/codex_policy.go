@@ -1,7 +1,7 @@
 package auth
 
-// Codex Config page runtime: private-instruction credential routing, the opt-in
-// Free-plan preference, and the opt-in Codex credential failure policy. These hook
+// Codex Config page runtime: the opt-in Free-plan preference and the opt-in Codex
+// credential failure policy. These hook
 // into the existing selection and cooldown flow; they do not replace any selector.
 
 import (
@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/router-for-me/CLIProxyAPI/v8/internal/codexinstructions"
 	internalconfig "github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 )
 
@@ -24,17 +23,6 @@ func (m *Manager) loadRuntimeConfig() *internalconfig.Config {
 	}
 	cfg, _ := m.runtimeConfig.Load().(*internalconfig.Config)
 	return cfg
-}
-
-// CodexInstructionsConfig returns a copy of the runtime private-instruction settings,
-// or nil when no runtime config is loaded.
-func (m *Manager) CodexInstructionsConfig() *internalconfig.CodexInstructionsConfig {
-	cfg := m.loadRuntimeConfig()
-	if cfg == nil {
-		return nil
-	}
-	copyCfg := cfg.Codex.Instructions
-	return &copyCfg
 }
 
 // codexPreferFreeEnabled reports whether Codex routing prefers Free-plan credentials.
@@ -211,25 +199,4 @@ func codexCoolingForModel(auth *Auth, modelKey string, now time.Time) bool {
 		return state.Unavailable && state.NextRetryAfter.After(now)
 	}
 	return false
-}
-
-// privateInstructionsPolicy carries the private-instruction routing flags the request
-// handler resolved into execution metadata.
-type privateInstructionsPolicy struct {
-	active bool
-	meta   map[string]any
-}
-
-func privateInstructionsPolicyFromMetadata(meta map[string]any) privateInstructionsPolicy {
-	if !codexinstructions.RequestIsPrivate(meta) && !codexinstructions.RequestReservesMarkedAuths(meta) {
-		return privateInstructionsPolicy{}
-	}
-	return privateInstructionsPolicy{active: true, meta: meta}
-}
-
-func (p privateInstructionsPolicy) allows(auth *Auth) bool {
-	if !p.active {
-		return true
-	}
-	return codexinstructions.AuthMatchesPolicy(isCodexCredential(auth), auth.Attributes, auth.Metadata, p.meta)
 }

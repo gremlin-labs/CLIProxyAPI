@@ -54,11 +54,7 @@ func (h *OpenAIAPIHandler) HandlerType() string {
 func (h *OpenAIAPIHandler) Models() []map[string]any {
 	// Get dynamic models from the global registry
 	modelRegistry := registry.GetGlobalRegistry()
-	models := modelRegistry.GetAvailableModels("openai")
-	if h == nil || h.BaseAPIHandler == nil {
-		return models
-	}
-	return handlers.ExpandPrivateCodexInstructionModels(h.AuthManager, models, "id")
+	return modelRegistry.GetAvailableModels("openai")
 }
 
 // OpenAIModels handles the /v1/models endpoint.
