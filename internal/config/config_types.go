@@ -360,7 +360,9 @@ type RoutingConfig struct {
 	// Explicit Claude Code, Codex, OpenCode, and pi session headers are preferred,
 	// followed by prompt_cache_key, Responses conversation IDs, legacy body IDs,
 	// execution or derived session identity, and the existing message-content hash fallback.
-	// Automatic failover is always enabled when bound auth becomes unavailable.
+	// A briefly unavailable bound auth is bypassed through one temporary detour auth while
+	// the binding is kept; the binding moves only when the auth is disabled, removed, or
+	// unavailable for longer than five minutes (the default prompt cache lifetime).
 	SessionAffinity bool `yaml:"session-affinity,omitempty" json:"session-affinity,omitempty"`
 
 	// SessionAffinityTTL specifies how long session-to-auth bindings are retained.

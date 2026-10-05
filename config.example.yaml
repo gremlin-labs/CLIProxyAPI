@@ -151,11 +151,15 @@ routing:
   # Explicit Claude Code, Codex, OpenCode, and pi session headers are preferred,
   # followed by prompt_cache_key, Responses conversation IDs, legacy body IDs,
   # execution or derived session identity, and the existing first-message hash fallback.
-  # Automatic failover is always enabled when bound auth becomes unavailable.
-  # An established binding outranks credential priority: once a session is bound, that
-  # credential is kept even if a higher-priority credential recovers. Credential priority
-  # still decides cold bindings, requests without a session, and post-failover rebinding.
-  session-affinity: false # default: false
+  # Recommended: keeping a conversation on one account keeps its prompt cache warm.
+  # When the bound account is briefly unavailable (a transient error, a short rate limit,
+  # or a retry within one request) the request is served by one temporary detour account
+  # while the binding stays put, so the thread returns to its cached account. The binding
+  # moves only when the account is disabled, removed, or unavailable for longer than five
+  # minutes (the default prompt cache lifetime).
+  # An established binding outranks credential priority. Credential priority (and the
+  # routing strategy) still decide cold bindings, requests without a session, and moves.
+  session-affinity: true # default when omitted: false
   # How long session-to-auth bindings are retained. Default: 1h
   session-affinity-ttl: "1h"
   # When true (default), subagents (child sessions with parent references) inherit and bind

@@ -10,7 +10,7 @@ import (
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 )
 
-func TestManagerSessionAffinityPreservesBindingAcrossHigherPriorityRecovery(t *testing.T) {
+func TestManagerSessionAffinityReturnsAfterBriefOutageAndMovesAfterLongOutage(t *testing.T) {
 	for _, testCase := range []struct {
 		name           string
 		providerSuffix string
@@ -87,12 +87,32 @@ func TestManagerSessionAffinityPreservesBindingAcrossHigherPriorityRecovery(t *t
 				Error:    &Error{HTTPStatus: http.StatusTooManyRequests, Message: "quota"},
 			})
 			if got := pick(opts); got.ID != lowID {
-				t.Fatalf("failover binding = %q, want %q", got.ID, lowID)
+				t.Fatalf("detour during brief outage = %q, want %q", got.ID, lowID)
 			}
 
+			// A brief outage is a detour: the thread returns to its original credential,
+			// where its prompt cache lives, once that recovers.
+			expireSessionAffinityPriorityModelCooldown(t, manager, highID, model)
+			if got := pick(opts); got.ID != highID {
+				t.Fatalf("binding after brief outage = %q, want the original %q", got.ID, highID)
+			}
+
+			// An outage longer than the grace period moves the binding for good.
+			longOutage := time.Hour
+			manager.MarkResult(ctx, Result{
+				AuthID:     highID,
+				Provider:   provider,
+				Model:      model,
+				Success:    false,
+				RetryAfter: &longOutage,
+				Error:      &Error{HTTPStatus: http.StatusTooManyRequests, Message: "quota"},
+			})
+			if got := pick(opts); got.ID != lowID {
+				t.Fatalf("failover binding after long outage = %q, want %q", got.ID, lowID)
+			}
 			expireSessionAffinityPriorityModelCooldown(t, manager, highID, model)
 			if got := pick(opts); got.ID != lowID {
-				t.Fatalf("binding after higher-priority recovery = %q, want sticky %q", got.ID, lowID)
+				t.Fatalf("binding after long-outage recovery = %q, want sticky %q", got.ID, lowID)
 			}
 
 			newSessionOpts := cliproxyexecutor.Options{Metadata: map[string]any{
@@ -103,11 +123,12 @@ func TestManagerSessionAffinityPreservesBindingAcrossHigherPriorityRecovery(t *t
 			}
 
 			manager.MarkResult(ctx, Result{
-				AuthID:   lowID,
-				Provider: provider,
-				Model:    model,
-				Success:  false,
-				Error:    &Error{HTTPStatus: http.StatusTooManyRequests, Message: "quota"},
+				AuthID:     lowID,
+				Provider:   provider,
+				Model:      model,
+				Success:    false,
+				RetryAfter: &longOutage,
+				Error:      &Error{HTTPStatus: http.StatusTooManyRequests, Message: "quota"},
 			})
 			if got := pick(opts); got.ID != highID {
 				t.Fatalf("binding after bound auth became unavailable = %q, want %q", got.ID, highID)

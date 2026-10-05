@@ -433,6 +433,7 @@ func (m *Manager) SetSelector(selector Selector) {
 	}
 	m.selector = selector
 	m.mu.Unlock()
+	m.attachSelectorLookup(selector)
 
 	if oldSelector != nil {
 		if stoppable, ok := oldSelector.(StoppableSelector); ok {
@@ -442,6 +443,15 @@ func (m *Manager) SetSelector(selector Selector) {
 	if m.scheduler != nil {
 		m.scheduler.setSelector(selector)
 		m.syncScheduler()
+	}
+}
+
+// attachSelectorLookup lets a session affinity selector resolve credentials that
+// were filtered out of the candidate list. Selectors are always invoked without
+// the Manager lock held, so the lookup can use GetByID.
+func (m *Manager) attachSelectorLookup(selector Selector) {
+	if affinity, ok := selector.(*SessionAffinitySelector); ok {
+		affinity.setAuthLookup(m.GetByID)
 	}
 }
 

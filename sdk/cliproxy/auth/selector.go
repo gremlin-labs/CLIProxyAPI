@@ -914,6 +914,57 @@ type SessionAffinitySelector struct {
 	cache            *SessionCache
 	matcher          *cliproxysession.MerklePrefixMatcher
 	subagentAffinity bool
+
+	// awayMu guards awaySince, which records when a pinned credential was first
+	// found unavailable for a session key. While the outage is shorter than
+	// sessionAffinityRepinGrace the session is served elsewhere without moving
+	// its pin, so it returns to its cached credential once that recovers.
+	awayMu sync.Mutex
+	away   map[string]sessionAffinityAway
+	// now is overridable in tests.
+	now func() time.Time
+	// lookup resolves a credential that is no longer among the available
+	// candidates, so a pin's outage can be judged by its actual cooldown. The
+	// Manager installs it; it must not be called while holding the Manager lock.
+	lookupMu sync.RWMutex
+	lookup   func(id string) (*Auth, bool)
+}
+
+// setAuthLookup installs the credential lookup used to judge pinned-credential outages.
+func (s *SessionAffinitySelector) setAuthLookup(lookup func(id string) (*Auth, bool)) {
+	if s == nil {
+		return
+	}
+	s.lookupMu.Lock()
+	s.lookup = lookup
+	s.lookupMu.Unlock()
+}
+
+func (s *SessionAffinitySelector) lookupAuth(id string) (*Auth, bool, bool) {
+	s.lookupMu.RLock()
+	lookup := s.lookup
+	s.lookupMu.RUnlock()
+	if lookup == nil {
+		return nil, false, false
+	}
+	auth, ok := lookup(id)
+	return auth, ok, true
+}
+
+// sessionAffinityRepinGrace is how long a session tolerates its pinned credential
+// being unavailable before the pin moves. It matches the default Anthropic prompt
+// cache lifetime: a shorter outage keeps the thread's cache worth returning to.
+const sessionAffinityRepinGrace = 5 * time.Minute
+
+// maxSessionAffinityAwayEntries bounds the outage bookkeeping map.
+const maxSessionAffinityAwayEntries = 4096
+
+// sessionAffinityAway tracks a session whose pinned credential is unavailable:
+// when the outage began and which credential serves the session meanwhile, so
+// consecutive detour requests share one credential (and its prompt cache).
+type sessionAffinityAway struct {
+	since  time.Time
+	detour string
 }
 
 // SessionAffinityConfig configures the session affinity selector.
@@ -1013,7 +1064,7 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 			opts.Metadata[cliproxyexecutor.CanonicalSessionIDMetadataKey] = primaryID
 		}
 	}
-	now := time.Now()
+	now := s.clock()
 	availabilityCandidates := auths
 	if _, weighted := s.fallback.(*WeightedRoundRobinSelector); weighted {
 		availabilityCandidates = positiveWeightAuths(auths)
@@ -1060,20 +1111,30 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 		for _, auth := range available {
 			if auth.ID == cachedAuthID {
 				bind(auth.ID)
+				s.clearAway(cacheKey)
 				entry.Infof("session-affinity: cache hit | session=%s auth=%s provider=%s model=%s", truncateSessionID(primaryID), auth.ID, provider, model)
 				return auth, nil
 			}
 		}
-		// Cached auth not available, reselect via fallback selector for even distribution
-		auth, err := s.fallback.Pick(ctx, provider, model, opts, fallbackAuths)
-		if err != nil {
-			return nil, err
-		}
+		// Cached auth not available. Keep using the current detour credential when
+		// there is one, so the thread does not scatter across the pool meanwhile.
+		auth := s.detourAuth(cacheKey, fallbackAuths)
 		if auth == nil {
-			return nil, nil
+			picked, err := s.fallback.Pick(ctx, provider, model, opts, fallbackAuths)
+			if err != nil {
+				return nil, err
+			}
+			if picked == nil {
+				return nil, nil
+			}
+			auth = picked
 		}
-		bind(auth.ID)
-		entry.Infof("session-affinity: cache hit but auth unavailable, reselected | session=%s auth=%s provider=%s model=%s", truncateSessionID(primaryID), auth.ID, provider, model)
+		if s.shouldRepin(cacheKey, cachedAuthID, auth.ID, auths, model, now) {
+			bind(auth.ID)
+			entry.Infof("session-affinity: bound auth unavailable, moved binding | session=%s from=%s auth=%s provider=%s model=%s", truncateSessionID(primaryID), cachedAuthID, auth.ID, provider, model)
+		} else {
+			entry.Infof("session-affinity: bound auth briefly unavailable, temporary detour | session=%s bound=%s auth=%s provider=%s model=%s", truncateSessionID(primaryID), cachedAuthID, auth.ID, provider, model)
+		}
 		return auth, nil
 	}
 
@@ -1109,6 +1170,147 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 		entry.Infof("session-affinity: cache miss, new binding | session=%s auth=%s provider=%s model=%s", truncateSessionID(primaryID), auth.ID, provider, model)
 	}
 	return auth, nil
+}
+
+func (s *SessionAffinitySelector) clock() time.Time {
+	if s != nil && s.now != nil {
+		return s.now()
+	}
+	return time.Now()
+}
+
+// shouldRepin reports whether a session should move its pin away from boundID to
+// detourID. A disabled credential, one excluded by weight, or one blocked for
+// longer than the grace period moves the pin at once. Anything shorter (a brief
+// cooldown, an in-request retry that excluded the credential, a token refresh) is
+// a temporary detour, unless the credential has been away for the grace period.
+func (s *SessionAffinitySelector) shouldRepin(cacheKey, boundID, detourID string, auths []*Auth, model string, now time.Time) bool {
+	_, weighted := s.fallback.(*WeightedRoundRobinSelector)
+	var bound *Auth
+	for _, auth := range auths {
+		if auth != nil && auth.ID == boundID {
+			bound = auth
+			break
+		}
+	}
+	if bound == nil {
+		// Unavailable credentials are filtered out before the selector runs. Without a
+		// lookup (a selector used outside a Manager) a missing credential cannot be told
+		// apart from a removed one, so keep the original move-on-unavailable behaviour.
+		auth, found, canLookup := s.lookupAuth(boundID)
+		if !canLookup || !found {
+			s.clearAway(cacheKey)
+			return true
+		}
+		bound = auth
+	}
+	for _, auth := range []*Auth{bound} {
+		if auth == nil {
+			continue
+		}
+		if weighted && authWeight(auth) <= 0 {
+			s.clearAway(cacheKey)
+			return true
+		}
+		blocked, reason, until := isAuthBlockedForModel(auth, model, now)
+		if blocked && reason == blockReasonDisabled {
+			s.clearAway(cacheKey)
+			return true
+		}
+		if !blocked {
+			// Aliased routes cool the upstream target model rather than the requested
+			// name, so fall back to the longest active per-model cooldown.
+			until = latestModelCooldown(auth, now)
+		}
+		if !until.IsZero() && until.Sub(now) > sessionAffinityRepinGrace {
+			s.clearAway(cacheKey)
+			return true
+		}
+		break
+	}
+
+	s.awayMu.Lock()
+	defer s.awayMu.Unlock()
+	if s.away == nil {
+		s.away = make(map[string]sessionAffinityAway)
+	}
+	state, ok := s.away[cacheKey]
+	if !ok {
+		if len(s.away) >= maxSessionAffinityAwayEntries {
+			for key, old := range s.away {
+				if now.Sub(old.since) > sessionAffinityRepinGrace {
+					delete(s.away, key)
+				}
+			}
+		}
+		s.away[cacheKey] = sessionAffinityAway{since: now, detour: detourID}
+		return false
+	}
+	if now.Sub(state.since) >= sessionAffinityRepinGrace {
+		delete(s.away, cacheKey)
+		return true
+	}
+	state.detour = detourID
+	s.away[cacheKey] = state
+	return false
+}
+
+// latestModelCooldown returns the latest recovery time among the credential's
+// per-model states that are still cooling down.
+func latestModelCooldown(auth *Auth, now time.Time) time.Time {
+	var latest time.Time
+	for _, state := range auth.ModelStates {
+		if state == nil {
+			continue
+		}
+		for _, at := range []time.Time{state.NextRetryAfter, state.Quota.NextRecoverAt} {
+			if at.After(now) && at.After(latest) {
+				latest = at
+			}
+		}
+	}
+	return latest
+}
+
+// detourAuth returns the credential already serving a session during an outage
+// of its pinned credential, when it is still among the candidates.
+func (s *SessionAffinitySelector) detourAuth(cacheKey string, candidates []*Auth) *Auth {
+	s.awayMu.Lock()
+	state, ok := s.away[cacheKey]
+	s.awayMu.Unlock()
+	if !ok || state.detour == "" {
+		return nil
+	}
+	for _, auth := range candidates {
+		if auth != nil && auth.ID == state.detour {
+			return auth
+		}
+	}
+	return nil
+}
+
+func (s *SessionAffinitySelector) clearAway(cacheKey string) {
+	s.awayMu.Lock()
+	defer s.awayMu.Unlock()
+	delete(s.away, cacheKey)
+}
+
+// sessionAffinityTransientFailure reports failures that should not move a session's
+// pin on their own: transport errors, server errors and rate limits that clear
+// within the grace period. Longer outages are released as before.
+func sessionAffinityTransientFailure(res Result) bool {
+	if res.Error == nil {
+		return false
+	}
+	status := res.Error.StatusCode()
+	switch {
+	case status == 0, status == http.StatusRequestTimeout, status >= 500 && status != http.StatusNotImplemented:
+		return true
+	case status == http.StatusTooManyRequests:
+		return res.RetryAfter == nil || *res.RetryAfter <= sessionAffinityRepinGrace
+	default:
+		return false
+	}
 }
 
 func (s *SessionAffinitySelector) pickLCP(ctx context.Context, provider, model string, opts cliproxyexecutor.Options, auths []*Auth, entry *log.Entry) (*Auth, bool, error) {
@@ -1545,6 +1747,13 @@ func (s *SessionAffinitySelector) OnResult(res Result) {
 		return
 	}
 
+	// A transient failure keeps the binding: Pick consults the credential's cooldown
+	// state on the next request and only moves the pin for a disabled credential or
+	// an outage longer than sessionAffinityRepinGrace, so a brief error does not
+	// discard the thread's prompt cache.
+	if sessionAffinityTransientFailure(res) {
+		return
+	}
 	s.cache.CompareAndDelete(cacheKey, res.AuthID)
 	if fallbackKey != "" {
 		s.cache.CompareAndDelete(fallbackKey, res.AuthID)

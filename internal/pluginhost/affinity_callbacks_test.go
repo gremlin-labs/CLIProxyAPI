@@ -194,7 +194,26 @@ func TestHostAffinityLookupCallback_Contract(t *testing.T) {
 			t.Fatalf("initial pick = %s, want %s", picked.ID, authA.ID)
 		}
 
-		// Rebind to authB
+		// Rebind to authB. A bound credential that is merely absent from one pick is a
+		// temporary detour, so make authA genuinely unavailable (disabled) to force the move.
+		current, ok := manager.GetByID(authA.ID)
+		if !ok {
+			t.Fatal("authA missing from manager")
+		}
+		disabledA := current.Clone()
+		disabledA.Disabled = true
+		disabledA.Status = coreauth.StatusDisabled
+		if _, errUpdate := manager.Update(context.Background(), disabledA); errUpdate != nil {
+			t.Fatalf("disable authA: %v", errUpdate)
+		}
+		t.Cleanup(func() {
+			if restored, found := manager.GetByID(authA.ID); found {
+				restoredA := restored.Clone()
+				restoredA.Disabled = false
+				restoredA.Status = coreauth.StatusActive
+				_, _ = manager.Update(context.Background(), restoredA)
+			}
+		})
 		picked2, _ := selector.Pick(context.Background(), "anthropic", "claude-3-7-sonnet", opts, []*coreauth.Auth{authB})
 		if picked2.ID != authB.ID {
 			t.Fatalf("second pick = %s, want %s", picked2.ID, authB.ID)

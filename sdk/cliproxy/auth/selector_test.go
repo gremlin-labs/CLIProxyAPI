@@ -992,8 +992,9 @@ func TestSessionAffinitySelector_ThinkingSuffixVariantsPreserveBindingAndRelease
 		Model:    "claude-sonnet-4-5(high)",
 		AuthID:   first.ID,
 		Success:  false,
-		Error:    &Error{Code: "rate_limited", Message: "rate limited"},
-		Options:  optsWithMetadata,
+		// A lasting failure releases the binding (transient ones keep it).
+		Error:   &Error{HTTPStatus: http.StatusUnauthorized, Message: "unauthorized"},
+		Options: optsWithMetadata,
 	})
 
 	// After release, next pick should reselect using fallback selector
