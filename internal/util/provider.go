@@ -289,5 +289,9 @@ func shouldMaskQueryParam(key string) bool {
 	if strings.Contains(key, "token") || strings.Contains(key, "secret") {
 		return true
 	}
+	// OAuth redirect parameters: the authorization code, its CSRF state and a PKCE verifier.
+	if key == "code" || key == "state" || strings.Contains(key, "verifier") {
+		return true
+	}
 	return false
 }

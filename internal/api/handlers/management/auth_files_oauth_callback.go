@@ -120,7 +120,12 @@ func stopForwarderInstance(port int, forwarder *callbackForwarder) {
 	defer cancel()
 
 	if err := forwarder.server.Shutdown(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.WithError(err).Warnf("failed to shut down callback forwarder on port %d", port)
+		// Browsers often hold an unused pre-opened connection, which a graceful
+		// shutdown waits on; close it instead of leaving the listener lingering.
+		log.WithError(err).Debugf("callback forwarder on port %d did not drain; closing", port)
+		if errClose := forwarder.server.Close(); errClose != nil && !errors.Is(errClose, http.ErrServerClosed) {
+			log.WithError(errClose).Warnf("failed to close callback forwarder on port %d", port)
+		}
 	}
 
 	select {
