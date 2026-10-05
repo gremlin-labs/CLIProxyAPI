@@ -64,7 +64,8 @@ func (h *BaseAPIHandler) executeWithAuthManagerFormats(ctx context.Context, entr
 		reqMeta[coreexecutor.RequestPathMetadataKey] = execOptions.Path
 	}
 	reqMeta[coreexecutor.RequestedModelMetadataKey] = originalRequestedModel
-	addAuthSelectionModelMetadata(reqMeta, execOptions.AuthSelectionModel)
+	addAuthSelectionModelMetadata(reqMeta, stripPrivateCodexMarker(h.AuthManager, execOptions.AuthSelectionModel))
+	normalizedModel = applyPrivateCodexInstructionModel(h.AuthManager, normalizedModel, reqMeta)
 	addModelExecutionSourceMetadata(reqMeta, execOptions.InternalSource)
 	setReasoningEffortMetadata(reqMeta, entryProtocol, normalizedModel, rawJSON)
 	setServiceTierMetadata(reqMeta, rawJSON)
@@ -136,7 +137,8 @@ func (h *BaseAPIHandler) executeCountWithAuthManager(ctx context.Context, handle
 	providers = adjustExecutionProvidersForEntryProtocol(handlerType, providers)
 	reqMeta := requestExecutionMetadata(ctx)
 	reqMeta[coreexecutor.RequestedModelMetadataKey] = originalRequestedModel
-	addAuthSelectionModelMetadata(reqMeta, execOptions.AuthSelectionModel)
+	addAuthSelectionModelMetadata(reqMeta, stripPrivateCodexMarker(h.AuthManager, execOptions.AuthSelectionModel))
+	normalizedModel = applyPrivateCodexInstructionModel(h.AuthManager, normalizedModel, reqMeta)
 	setReasoningEffortMetadata(reqMeta, handlerType, normalizedModel, rawJSON)
 	setServiceTierMetadata(reqMeta, rawJSON)
 	setGenerateMetadata(reqMeta, rawJSON)

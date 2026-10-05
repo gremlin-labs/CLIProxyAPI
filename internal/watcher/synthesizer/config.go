@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/codexinstructions"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/constant"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/util"
@@ -257,6 +258,9 @@ func (s *ConfigSynthesizer) synthesizeCodexStyleKeys(ctx *SynthesisContext, entr
 		}
 		if provider == "codex" && entry.AlphaSearch {
 			attrs[coreauth.AttributeCodexAlphaSearch] = "true"
+		}
+		if provider == "codex" && entry.AllowPrivateInstructions {
+			attrs[codexinstructions.AuthAttributeKey] = "true"
 		}
 		if provider == "codex" && entry.DisableCodexCloaking != nil {
 			attrs[coreauth.AttributeCodexDisableCloaking] = strconv.FormatBool(*entry.DisableCodexCloaking)

@@ -762,6 +762,7 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 				return
 			}
 		}
+		result = m.applyCodexUsageLimitFallback(result)
 	}
 	modelKey := canonicalModelKey(result.Model)
 
@@ -797,6 +798,7 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 			auth.Failed++
 		}
 		wasTerminalUnauthorized := hasUnauthorizedAuthFailure(auth)
+		codexDisableReason, codexDisable := m.trackCodexFailure(auth, result, modelKey, now)
 
 		if result.Success {
 			if wasTerminalUnauthorized {
@@ -1028,6 +1030,22 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 			// so re-enabling the credential makes it selectable immediately.
 			clearCooldownStateForAuth(auth, now)
 			logEntryWithRequestID(ctx).WithField("auth_id", auth.ID).Warn("codex workspace deactivated; credential disabled")
+		}
+		if codexDisable && !deactivatedWorkspace {
+			// Opt-in Codex failure policy: the configured consecutive-failure threshold
+			// was reached. Disable like the management toggle; re-enabling is manual.
+			deactivatedWorkspace = true
+			auth.Disabled = true
+			auth.Status = StatusDisabled
+			auth.StatusMessage = codexDisableReason
+			if auth.Metadata == nil {
+				auth.Metadata = make(map[string]any)
+			}
+			auth.Metadata["disabled"] = true
+			auth.codexUsageLimitHits = 0
+			auth.codexAuthFailureHits = 0
+			clearCooldownStateForAuth(auth, now)
+			logEntryWithRequestID(ctx).WithField("auth_id", auth.ID).WithField("reason", codexDisableReason).Warn("codex failure policy threshold reached; credential disabled")
 		}
 
 		auth.Generation++

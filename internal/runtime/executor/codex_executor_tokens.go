@@ -40,6 +40,7 @@ func (e *CodexExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Auth
 	body, _ = sjson.DeleteBytes(body, "stream_options")
 	body = helps.SetBoolIfDifferent(body, "stream", false)
 	body = normalizeCodexInstructions(body, helps.IsNativeCodexRequest(req.Payload, opts))
+	body = helps.ApplyCodexConfiguredInstructions(e.cfg, auth, baseModel, body, opts.Metadata)
 
 	body = helps.NewPayloadFinalizer(e.cfg, e.Identifier(), baseModel, to.String(), "", originalTranslatedForPayload, req, opts)(body)
 	enc, err := tokenizerForCodexModel(baseModel)

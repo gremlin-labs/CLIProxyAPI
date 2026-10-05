@@ -76,9 +76,10 @@ type requiredAuthKindContextKey struct{}
 type credentialPolicyContextKey struct{}
 
 type authSelectionEligibility struct {
-	requiredKind     string
-	credentialPolicy string
-	disallowFreeAuth bool
+	requiredKind        string
+	credentialPolicy    string
+	disallowFreeAuth    bool
+	privateInstructions privateInstructionsPolicy
 }
 
 func withRequiredAuthKind(ctx context.Context, requiredKind string) context.Context {
@@ -98,7 +99,10 @@ func credentialPolicyFromContext(ctx context.Context) string {
 }
 
 func authSelectionEligibilityForRequest(ctx context.Context, opts cliproxyexecutor.Options) authSelectionEligibility {
-	eligibility := authSelectionEligibility{disallowFreeAuth: disallowFreeAuthFromMetadata(opts.Metadata)}
+	eligibility := authSelectionEligibility{
+		disallowFreeAuth:    disallowFreeAuthFromMetadata(opts.Metadata),
+		privateInstructions: privateInstructionsPolicyFromMetadata(opts.Metadata),
+	}
 	if ctx != nil {
 		eligibility.requiredKind, _ = ctx.Value(requiredAuthKindContextKey{}).(string)
 		eligibility.credentialPolicy, _ = ctx.Value(credentialPolicyContextKey{}).(string)
@@ -114,6 +118,9 @@ func (e authSelectionEligibility) allows(auth *Auth) bool {
 		return false
 	}
 	if e.credentialPolicy != "" && !credentialPolicyAllows(e.credentialPolicy, auth) {
+		return false
+	}
+	if !e.privateInstructions.allows(auth) {
 		return false
 	}
 	return !e.disallowFreeAuth || !isFreeCodexAuth(auth)
@@ -631,6 +638,9 @@ func (m *Manager) availableAuthsForRouteModelWithPriorityMode(auths []*Auth, pro
 		return nil, newAuthUnavailableErrorWithCause(earliest, now, lastCandidateErr)
 	}
 
+	if m.codexPreferFreeEnabled() {
+		availableByPriority = preferFreeCodexBuckets(availableByPriority)
+	}
 	return availableAuthsFromPriorityBuckets(availableByPriority, allPriorities), nil
 }
 
@@ -1657,6 +1667,10 @@ func (m *Manager) CloseExecutionSession(sessionID string) {
 
 func (m *Manager) useSchedulerFastPath() bool {
 	if m == nil || m.scheduler == nil {
+		return false
+	}
+	// The scheduler does not implement the Codex Free-plan preference; the legacy path does.
+	if m.codexPreferFreeEnabled() {
 		return false
 	}
 	return isBuiltInSelector(m.Selector())
