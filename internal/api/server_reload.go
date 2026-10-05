@@ -13,6 +13,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/managementasset"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/redisqueue"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/usagestore"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/util"
 	sdkAuth "github.com/router-for-me/CLIProxyAPI/v8/sdk/auth"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
@@ -92,6 +93,17 @@ func (s *Server) UpdateClientsContext(ctx context.Context, cfg *config.Config) b
 
 	if oldCfg == nil || oldCfg.RedisUsageQueueRetentionSeconds != cfg.RedisUsageQueueRetentionSeconds {
 		redisqueue.SetRetentionSeconds(cfg.RedisUsageQueueRetentionSeconds)
+	}
+
+	if oldCfg == nil ||
+		oldCfg.UsageStorePath != cfg.UsageStorePath ||
+		oldCfg.UsageRetentionDays != cfg.UsageRetentionDays ||
+		oldCfg.UsageStatisticsEnabled != cfg.UsageStatisticsEnabled {
+		if store, errUsage := usagestore.Configure(cfg.UsageStorePath, s.configFilePath, cfg.UsageRetentionDays, cfg.UsageStatisticsEnabled); errUsage != nil {
+			log.Errorf("failed to reconfigure usage store: %v", errUsage)
+		} else if s.mgmt != nil {
+			s.mgmt.SetUsageStore(store)
+		}
 	}
 
 	if s.requestLogger != nil && (oldCfg == nil || oldCfg.ErrorLogsMaxFiles != cfg.ErrorLogsMaxFiles) {

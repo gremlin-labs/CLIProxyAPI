@@ -1122,6 +1122,13 @@ observability:
     # When false, disable in-memory usage statistics aggregation
     usage-statistics-enabled: false
 
+    # Durable request monitoring store (SQLite) used by the management panel's
+    # Monitoring page. Events are recorded only while usage-statistics-enabled is true.
+    # Relative paths resolve under WRITABLE_PATH when set, otherwise next to this file.
+    # store-path: "usage.db"
+    # Days of usage events to keep. Default: 90.
+    # retention-days: 90
+
     # How long (in seconds) usage queue items are retained in memory for the Management API.
     # The local Redis RESP usage output is disabled.
     # Default: 60. Max: 3600.

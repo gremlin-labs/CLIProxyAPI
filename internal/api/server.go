@@ -26,6 +26,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/managementasset"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/pluginhost"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/redisqueue"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/usagestore"
 	sdkaccess "github.com/router-for-me/CLIProxyAPI/v8/sdk/access"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/api/handlers"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
@@ -224,6 +225,13 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 		s.mgmt.SetPostAuthPersistHook(optionState.postAuthPersistHook)
 	}
 	s.localPassword = optionState.localPassword
+
+	// Durable usage store backing the request monitoring management endpoints.
+	if store, errUsage := usagestore.Configure(cfg.UsageStorePath, configFilePath, cfg.UsageRetentionDays, cfg.UsageStatisticsEnabled); errUsage != nil {
+		log.Errorf("failed to open usage store: %v", errUsage)
+	} else {
+		s.mgmt.SetUsageStore(store)
+	}
 
 	// Home heartbeat gate: when home is enabled, block all endpoints with 503 until the
 	// subscribe-config heartbeat connection is healthy.
@@ -447,6 +455,8 @@ func (s *Server) Stop(ctx context.Context) error {
 	if s.codexLiveHandler != nil {
 		s.codexLiveHandler.Close()
 	}
+	// Flush buffered usage events before the process exits.
+	usagestore.CloseRuntime()
 	if errCloseServer != nil {
 		return fmt.Errorf("failed to shutdown HTTP server: %v", errCloseServer)
 	}

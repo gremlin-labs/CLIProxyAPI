@@ -1,0 +1,755 @@
+package usagestore
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"slices"
+	"strings"
+	"time"
+)
+
+// QueryFilter selects usage events for list/summary APIs.
+type QueryFilter struct {
+	FromMS       int64
+	ToMS         int64
+	Search       string
+	Models       []string
+	Providers    []string
+	AuthIndices  []string
+	Sources      []string
+	APIKeys      []string
+	APIKeyHashes []string
+	FailedOnly   bool
+	SuccessOnly  bool
+	Limit        int
+	BeforeID     int64
+}
+
+// Summary is aggregate metrics for a filtered range.
+type Summary struct {
+	TotalCalls   int64   `json:"total_calls"`
+	SuccessCalls int64   `json:"success_calls"`
+	FailureCalls int64   `json:"failure_calls"`
+	SuccessRate  float64 `json:"success_rate"`
+	InputTokens  int64   `json:"input_tokens"`
+	// NetInputTokens is per-row billable/uncached input (see BillableInputTokens),
+	// summed in SQL. Do not derive this as input_tokens - cache_read_tokens on the
+	// aggregates — mixed inclusive/net reporting makes that under-count longer ranges.
+	NetInputTokens      int64   `json:"net_input_tokens"`
+	OutputTokens        int64   `json:"output_tokens"`
+	ReasoningTokens     int64   `json:"reasoning_tokens"`
+	CachedTokens        int64   `json:"cached_tokens"`
+	CacheReadTokens     int64   `json:"cache_read_tokens"`
+	CacheCreationTokens int64   `json:"cache_creation_tokens"`
+	TotalTokens         int64   `json:"total_tokens"`
+	AvgLatencyMS        float64 `json:"avg_latency_ms"`
+	AvgTTFTMS           float64 `json:"avg_ttft_ms"`
+	EstimatedCost       float64 `json:"estimated_cost"`
+	PricedCalls         int64   `json:"priced_calls"`
+}
+
+const (
+	recentRequestBucketCount      = 20
+	recentRequestBucketDurationMS = int64(10 * time.Minute / time.Millisecond)
+)
+
+// RecentRequestBucket is one ten-minute request outcome bucket.
+type RecentRequestBucket struct {
+	Time    string `json:"time"`
+	Success int64  `json:"success"`
+	Failed  int64  `json:"failed"`
+}
+
+// AccountStat aggregates usage by auth/source.
+type AccountStat struct {
+	AuthIndex      string                `json:"auth_index,omitempty"`
+	Source         string                `json:"source,omitempty"`
+	SourceHash     string                `json:"source_hash,omitempty"`
+	Provider       string                `json:"provider,omitempty"`
+	TotalCalls     int64                 `json:"total_calls"`
+	SuccessCalls   int64                 `json:"success_calls"`
+	FailureCalls   int64                 `json:"failure_calls"`
+	TotalTokens    int64                 `json:"total_tokens"`
+	InputTokens    int64                 `json:"input_tokens"`
+	OutputTokens   int64                 `json:"output_tokens"`
+	EstimatedCost  float64               `json:"estimated_cost"`
+	RecentRequests []RecentRequestBucket `json:"recent_requests"`
+}
+
+// APIKeyStat aggregates usage by client API key.
+type APIKeyStat struct {
+	APIKey        string  `json:"api_key,omitempty"`
+	APIKeyHash    string  `json:"api_key_hash,omitempty"`
+	TotalCalls    int64   `json:"total_calls"`
+	SuccessCalls  int64   `json:"success_calls"`
+	FailureCalls  int64   `json:"failure_calls"`
+	TotalTokens   int64   `json:"total_tokens"`
+	InputTokens   int64   `json:"input_tokens"`
+	OutputTokens  int64   `json:"output_tokens"`
+	EstimatedCost float64 `json:"estimated_cost"`
+}
+
+// FilterOptions lists distinct filter values in range.
+type FilterOptions struct {
+	Models       []string `json:"models"`
+	Providers    []string `json:"providers"`
+	AuthIndices  []string `json:"auth_indices"`
+	Sources      []string `json:"sources"`
+	APIKeys      []string `json:"api_keys"`
+	APIKeyHashes []string `json:"api_key_hashes"`
+}
+
+func (f QueryFilter) normalize() QueryFilter {
+	if f.Limit <= 0 {
+		f.Limit = 100
+	}
+	if f.Limit > 1000 {
+		f.Limit = 1000
+	}
+	return f
+}
+
+func buildWhere(f QueryFilter) (string, []any) {
+	clauses := make([]string, 0, 12)
+	args := make([]any, 0, 16)
+	if f.FromMS > 0 {
+		clauses = append(clauses, "timestamp_ms >= ?")
+		args = append(args, f.FromMS)
+	}
+	if f.ToMS > 0 {
+		clauses = append(clauses, "timestamp_ms <= ?")
+		args = append(args, f.ToMS)
+	}
+	if f.BeforeID > 0 {
+		clauses = append(clauses, "id < ?")
+		args = append(args, f.BeforeID)
+	}
+	if f.FailedOnly {
+		clauses = append(clauses, "failed = 1")
+	} else if f.SuccessOnly {
+		clauses = append(clauses, "failed = 0")
+	}
+	appendIn := func(column string, values []string) {
+		clean := make([]string, 0, len(values))
+		for _, v := range values {
+			v = strings.TrimSpace(v)
+			if v != "" {
+				clean = append(clean, v)
+			}
+		}
+		if len(clean) == 0 {
+			return
+		}
+		holders := make([]string, len(clean))
+		for i, v := range clean {
+			holders[i] = "?"
+			args = append(args, v)
+		}
+		clauses = append(clauses, fmt.Sprintf("%s IN (%s)", column, strings.Join(holders, ",")))
+	}
+	appendIn("model", f.Models)
+	appendIn("provider", f.Providers)
+	appendIn("auth_index", f.AuthIndices)
+	appendIn("source", f.Sources)
+	appendIn("api_key", f.APIKeys)
+	appendIn("api_key_hash", f.APIKeyHashes)
+
+	search := strings.TrimSpace(f.Search)
+	if search != "" {
+		like := "%" + search + "%"
+		clauses = append(clauses, `(
+			IFNULL(model,'') LIKE ? OR IFNULL(alias,'') LIKE ? OR IFNULL(provider,'') LIKE ? OR
+			IFNULL(source,'') LIKE ? OR IFNULL(auth_index,'') LIKE ? OR IFNULL(api_key,'') LIKE ? OR
+			IFNULL(api_key_hash,'') LIKE ? OR IFNULL(endpoint,'') LIKE ? OR IFNULL(request_id,'') LIKE ? OR
+			IFNULL(reasoning_effort,'') LIKE ?
+		)`)
+		for i := 0; i < 10; i++ {
+			args = append(args, like)
+		}
+	}
+	if len(clauses) == 0 {
+		return "", args
+	}
+	return "WHERE " + strings.Join(clauses, " AND "), args
+}
+
+// ListEvents returns newest-first events matching the filter.
+func (s *Store) ListEvents(ctx context.Context, filter QueryFilter) ([]Event, error) {
+	if s == nil {
+		return nil, fmt.Errorf("usagestore: nil store")
+	}
+	filter = filter.normalize()
+	where, args := buildWhere(filter)
+	query := `SELECT id, timestamp_ms, IFNULL(request_id,''), IFNULL(provider,''), IFNULL(executor_type,''),
+		IFNULL(model,''), IFNULL(alias,''), IFNULL(endpoint,''), IFNULL(auth_type,''), IFNULL(auth_index,''),
+		IFNULL(source,''), IFNULL(source_hash,''), IFNULL(api_key,''), IFNULL(api_key_hash,''), IFNULL(reasoning_effort,''),
+		IFNULL(service_tier,''), IFNULL(response_service_tier,''),
+		input_tokens, output_tokens, reasoning_tokens, cached_tokens, cache_read_tokens, cache_creation_tokens, total_tokens,
+		latency_ms, ttft_ms, failed, IFNULL(fail_status_code,0), IFNULL(fail_summary,''), created_at_ms
+		FROM usage_events ` + where + ` ORDER BY id DESC LIMIT ?`
+	args = append(args, filter.Limit)
+	rows, err := s.readDB.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]Event, 0, filter.Limit)
+	for rows.Next() {
+		var e Event
+		var latency, ttft sql.NullInt64
+		var failed int
+		if err := rows.Scan(
+			&e.ID, &e.TimestampMS, &e.RequestID, &e.Provider, &e.ExecutorType,
+			&e.Model, &e.Alias, &e.Endpoint, &e.AuthType, &e.AuthIndex,
+			&e.Source, &e.SourceHash, &e.APIKey, &e.APIKeyHash, &e.ReasoningEffort,
+			&e.ServiceTier, &e.ResponseServiceTier,
+			&e.InputTokens, &e.OutputTokens, &e.ReasoningTokens, &e.CachedTokens,
+			&e.CacheReadTokens, &e.CacheCreationTokens, &e.TotalTokens,
+			&latency, &ttft, &failed, &e.FailStatusCode, &e.FailSummary, &e.CreatedAtMS,
+		); err != nil {
+			return nil, err
+		}
+		if latency.Valid {
+			v := latency.Int64
+			e.LatencyMS = &v
+		}
+		if ttft.Valid {
+			v := ttft.Int64
+			e.TTFTMS = &v
+		}
+		e.Failed = failed != 0
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// GetSummary aggregates metrics for the filter.
+func (s *Store) GetSummary(ctx context.Context, filter QueryFilter) (Summary, error) {
+	var summary Summary
+	if s == nil {
+		return summary, fmt.Errorf("usagestore: nil store")
+	}
+	// Summary ignores pagination cursor/limit.
+	filter.BeforeID = 0
+	filter.Limit = 0
+	where, args := buildWhere(filter)
+	query := `SELECT
+		COUNT(*),
+		IFNULL(SUM(CASE WHEN failed = 0 THEN 1 ELSE 0 END),0),
+		IFNULL(SUM(CASE WHEN failed = 1 THEN 1 ELSE 0 END),0),
+		IFNULL(SUM(input_tokens),0),
+		IFNULL(SUM(` + sqlBillableInputExpr + `),0),
+		IFNULL(SUM(output_tokens),0),
+		IFNULL(SUM(reasoning_tokens),0),
+		IFNULL(SUM(cached_tokens),0),
+		IFNULL(SUM(cache_read_tokens),0),
+		IFNULL(SUM(cache_creation_tokens),0),
+		IFNULL(SUM(total_tokens),0),
+		IFNULL(AVG(latency_ms),0),
+		IFNULL(AVG(ttft_ms),0)
+		FROM usage_events ` + where
+	err := s.readDB.QueryRowContext(ctx, query, args...).Scan(
+		&summary.TotalCalls, &summary.SuccessCalls, &summary.FailureCalls,
+		&summary.InputTokens, &summary.NetInputTokens, &summary.OutputTokens, &summary.ReasoningTokens,
+		&summary.CachedTokens, &summary.CacheReadTokens, &summary.CacheCreationTokens,
+		&summary.TotalTokens, &summary.AvgLatencyMS, &summary.AvgTTFTMS,
+	)
+	if err != nil {
+		return summary, err
+	}
+	if summary.TotalCalls > 0 {
+		summary.SuccessRate = float64(summary.SuccessCalls) / float64(summary.TotalCalls)
+	}
+	return summary, nil
+}
+
+func recentRequestBucketLabel(bucketID int64) string {
+	start := time.UnixMilli(bucketID * recentRequestBucketDurationMS).In(time.Local)
+	return start.Format("15:04") + "-" + start.Add(10*time.Minute).Format("15:04")
+}
+
+func emptyRecentRequestBuckets(now time.Time) []RecentRequestBucket {
+	currentBucketID := now.UnixMilli() / recentRequestBucketDurationMS
+	out := make([]RecentRequestBucket, recentRequestBucketCount)
+	for i := range out {
+		bucketID := currentBucketID - int64(recentRequestBucketCount-1-i)
+		out[i].Time = recentRequestBucketLabel(bucketID)
+	}
+	return out
+}
+
+// GetAccountStats groups usage by auth_index/source.
+func (s *Store) GetAccountStats(ctx context.Context, filter QueryFilter, limit int) ([]AccountStat, error) {
+	if s == nil {
+		return nil, fmt.Errorf("usagestore: nil store")
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	filter.BeforeID = 0
+	filter.Limit = 0
+	where, args := buildWhere(filter)
+	query := `SELECT
+		IFNULL(auth_index,''), IFNULL(source,''), IFNULL(source_hash,''), IFNULL(provider,''),
+		COUNT(*),
+		IFNULL(SUM(CASE WHEN failed = 0 THEN 1 ELSE 0 END),0),
+		IFNULL(SUM(CASE WHEN failed = 1 THEN 1 ELSE 0 END),0),
+		IFNULL(SUM(total_tokens),0),
+		IFNULL(SUM(input_tokens),0),
+		IFNULL(SUM(output_tokens),0)
+		FROM usage_events ` + where + `
+		GROUP BY auth_index, source, source_hash, provider
+		ORDER BY COUNT(*) DESC
+		LIMIT ?`
+	args = append(args, limit)
+	rows, err := s.readDB.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]AccountStat, 0, limit)
+	for rows.Next() {
+		var st AccountStat
+		if err := rows.Scan(
+			&st.AuthIndex, &st.Source, &st.SourceHash, &st.Provider,
+			&st.TotalCalls, &st.SuccessCalls, &st.FailureCalls,
+			&st.TotalTokens, &st.InputTokens, &st.OutputTokens,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, st)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := s.attachAccountRecentRequests(ctx, filter, out, s.clock()); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (s *Store) attachAccountRecentRequests(ctx context.Context, filter QueryFilter, stats []AccountStat, now time.Time) error {
+	if len(stats) == 0 {
+		return nil
+	}
+	currentBucketID := now.UnixMilli() / recentRequestBucketDurationMS
+	windowStartMS := (currentBucketID - int64(recentRequestBucketCount-1)) * recentRequestBucketDurationMS
+	windowEndMS := (currentBucketID+1)*recentRequestBucketDurationMS - 1
+	if filter.FromMS < windowStartMS {
+		filter.FromMS = windowStartMS
+	}
+	if filter.ToMS == 0 || filter.ToMS > windowEndMS {
+		filter.ToMS = windowEndMS
+	}
+	filter.BeforeID = 0
+	filter.Limit = 0
+
+	statsByKey := make(map[string]*AccountStat, len(stats))
+	for i := range stats {
+		stats[i].RecentRequests = emptyRecentRequestBuckets(now)
+		key := AccountKey(stats[i].AuthIndex, stats[i].Source, stats[i].SourceHash, stats[i].Provider)
+		statsByKey[key] = &stats[i]
+	}
+	if filter.FromMS > filter.ToMS {
+		return nil
+	}
+
+	where, args := buildWhere(filter)
+	groups := make([]string, 0, len(stats))
+	for _, stat := range stats {
+		groups = append(groups, "(IFNULL(auth_index,'') = ? AND IFNULL(source,'') = ? AND IFNULL(source_hash,'') = ? AND IFNULL(provider,'') = ?)")
+		args = append(args, stat.AuthIndex, stat.Source, stat.SourceHash, stat.Provider)
+	}
+	where += " AND (" + strings.Join(groups, " OR ") + ")"
+	query := `SELECT IFNULL(auth_index,''), IFNULL(source,''), IFNULL(source_hash,''), IFNULL(provider,''),
+		CAST(timestamp_ms / ? AS INTEGER) AS bucket_id,
+		IFNULL(SUM(CASE WHEN failed = 0 THEN 1 ELSE 0 END),0),
+		IFNULL(SUM(CASE WHEN failed = 1 THEN 1 ELSE 0 END),0)
+		FROM usage_events ` + where + `
+		GROUP BY auth_index, source, source_hash, provider, bucket_id`
+	queryArgs := make([]any, 0, len(args)+1)
+	queryArgs = append(queryArgs, recentRequestBucketDurationMS)
+	queryArgs = append(queryArgs, args...)
+	rows, err := s.readDB.QueryContext(ctx, query, queryArgs...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var authIndex, source, sourceHash, provider string
+		var bucketID, success, failed int64
+		if err := rows.Scan(&authIndex, &source, &sourceHash, &provider, &bucketID, &success, &failed); err != nil {
+			return err
+		}
+		stat := statsByKey[AccountKey(authIndex, source, sourceHash, provider)]
+		if stat == nil {
+			continue
+		}
+		index := int(bucketID - (currentBucketID - int64(recentRequestBucketCount-1)))
+		if index < 0 || index >= len(stat.RecentRequests) {
+			continue
+		}
+		stat.RecentRequests[index].Success = success
+		stat.RecentRequests[index].Failed = failed
+	}
+	return rows.Err()
+}
+
+// SumCost computes the total estimated cost and priced-call count across ALL
+// events matching the filter. It aggregates token counts per model/alias and pricing band in
+// SQL and applies the price book once per group, so the result covers every
+// matching row. Billable input is netted per row before SUM so mixed
+// inclusive-input / net-input cache accounting cannot under-count longer ranges.
+// This replaces materializing a capped page of events (which silently undercounts
+// cost once the match count exceeds the page limit and breaks the "per-model
+// costs sum to the total" invariant).
+func (s *Store) SumCost(ctx context.Context, filter QueryFilter, prices map[string]ModelPrice, aliases map[string]string) (float64, int64, error) {
+	if s == nil {
+		return 0, 0, fmt.Errorf("usagestore: nil store")
+	}
+	filter.BeforeID = 0
+	filter.Limit = 0
+	where, args := buildWhere(filter)
+	query := `SELECT IFNULL(model,''), IFNULL(alias,''),
+		` + sqlPricingBandExpr(prices) + ` AS pricing_band, ` + sqlEffectiveServiceTierExpr + ` AS pricing_service_tier,
+		IFNULL(SUM(` + sqlBillableInputExpr + `),0), IFNULL(SUM(output_tokens),0), IFNULL(SUM(reasoning_tokens),0),
+		IFNULL(SUM(cache_read_tokens),0), IFNULL(SUM(cache_creation_tokens),0), IFNULL(SUM(` + sqlCachedOnlyExpr + `),0),
+		COUNT(*)
+		FROM usage_events ` + where + `
+		GROUP BY model, alias, pricing_band, pricing_service_tier`
+	rows, err := s.readDB.QueryContext(ctx, query, args...)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer rows.Close()
+	var total float64
+	var priced int64
+	for rows.Next() {
+		var model, alias string
+		var serviceTier string
+		var contextInput int64
+		var billableInput, output, reasoning, cacheRead, cacheCreation, cached, count int64
+		if err := rows.Scan(&model, &alias, &contextInput, &serviceTier, &billableInput, &output, &reasoning,
+			&cacheRead, &cacheCreation, &cached, &count); err != nil {
+			return 0, 0, err
+		}
+		p, _, ok := ResolvePrice([]string{model, alias}, prices, aliases)
+		if !ok {
+			continue
+		}
+		p = ResolveUsagePrice(p, contextInput, serviceTier)
+		// billableInput is already per-row netted; cacheRead is the raw sum for cache pricing.
+		total += EstimateCostParts(p, billableInput, output, reasoning, cacheRead, cacheCreation, cached)
+		priced += count
+	}
+	return total, priced, rows.Err()
+}
+
+// CostByAccount computes estimated cost per account group (auth_index, source,
+// source_hash, provider) across ALL matching events, applying per-model pricing.
+// The returned map is keyed the same way GetAccountStats groups accounts.
+func (s *Store) CostByAccount(ctx context.Context, filter QueryFilter, prices map[string]ModelPrice, aliases map[string]string) (map[string]float64, error) {
+	if s == nil {
+		return nil, fmt.Errorf("usagestore: nil store")
+	}
+	filter.BeforeID = 0
+	filter.Limit = 0
+	where, args := buildWhere(filter)
+	query := `SELECT IFNULL(auth_index,''), IFNULL(source,''), IFNULL(source_hash,''), IFNULL(provider,''),
+		IFNULL(model,''), IFNULL(alias,''),
+		` + sqlPricingBandExpr(prices) + ` AS pricing_band, ` + sqlEffectiveServiceTierExpr + ` AS pricing_service_tier,
+		IFNULL(SUM(` + sqlBillableInputExpr + `),0), IFNULL(SUM(output_tokens),0), IFNULL(SUM(reasoning_tokens),0),
+		IFNULL(SUM(cache_read_tokens),0), IFNULL(SUM(cache_creation_tokens),0), IFNULL(SUM(` + sqlCachedOnlyExpr + `),0)
+		FROM usage_events ` + where + `
+		GROUP BY auth_index, source, source_hash, provider, model, alias, pricing_band, pricing_service_tier`
+	rows, err := s.readDB.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[string]float64)
+	for rows.Next() {
+		var authIndex, source, sourceHash, provider, model, alias string
+		var serviceTier string
+		var contextInput int64
+		var billableInput, output, reasoning, cacheRead, cacheCreation, cached int64
+		if err := rows.Scan(&authIndex, &source, &sourceHash, &provider, &model, &alias, &contextInput, &serviceTier,
+			&billableInput, &output, &reasoning, &cacheRead, &cacheCreation, &cached); err != nil {
+			return nil, err
+		}
+		p, _, ok := ResolvePrice([]string{model, alias}, prices, aliases)
+		if !ok {
+			continue
+		}
+		p = ResolveUsagePrice(p, contextInput, serviceTier)
+		key := AccountKey(authIndex, source, sourceHash, provider)
+		out[key] += EstimateCostParts(p, billableInput, output, reasoning, cacheRead, cacheCreation, cached)
+	}
+	return out, rows.Err()
+}
+
+// AccountKey builds the grouping key shared by GetAccountStats and CostByAccount.
+func AccountKey(authIndex, source, sourceHash, provider string) string {
+	return authIndex + "\x00" + source + "\x00" + sourceHash + "\x00" + provider
+}
+
+// GetAPIKeyStats groups usage by client api_key (falls back to api_key_hash when blank).
+func (s *Store) GetAPIKeyStats(ctx context.Context, filter QueryFilter, limit int) ([]APIKeyStat, error) {
+	if s == nil {
+		return nil, fmt.Errorf("usagestore: nil store")
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	filter.BeforeID = 0
+	filter.Limit = 0
+	where, args := buildWhere(filter)
+	query := `SELECT
+		IFNULL(api_key,''), IFNULL(api_key_hash,''),
+		COUNT(*),
+		IFNULL(SUM(CASE WHEN failed = 0 THEN 1 ELSE 0 END),0),
+		IFNULL(SUM(CASE WHEN failed = 1 THEN 1 ELSE 0 END),0),
+		IFNULL(SUM(total_tokens),0),
+		IFNULL(SUM(input_tokens),0),
+		IFNULL(SUM(output_tokens),0)
+		FROM usage_events ` + where + `
+		GROUP BY api_key, api_key_hash
+		ORDER BY COUNT(*) DESC
+		LIMIT ?`
+	args = append(args, limit)
+	rows, err := s.readDB.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]APIKeyStat, 0, limit)
+	for rows.Next() {
+		var st APIKeyStat
+		if err := rows.Scan(
+			&st.APIKey, &st.APIKeyHash,
+			&st.TotalCalls, &st.SuccessCalls, &st.FailureCalls,
+			&st.TotalTokens, &st.InputTokens, &st.OutputTokens,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, st)
+	}
+	return out, rows.Err()
+}
+
+// CostByAPIKey computes estimated cost per api_key / api_key_hash group across ALL matching events.
+func (s *Store) CostByAPIKey(ctx context.Context, filter QueryFilter, prices map[string]ModelPrice, aliases map[string]string) (map[string]float64, error) {
+	if s == nil {
+		return nil, fmt.Errorf("usagestore: nil store")
+	}
+	filter.BeforeID = 0
+	filter.Limit = 0
+	where, args := buildWhere(filter)
+	query := `SELECT IFNULL(api_key,''), IFNULL(api_key_hash,''),
+		IFNULL(model,''), IFNULL(alias,''),
+		` + sqlPricingBandExpr(prices) + ` AS pricing_band, ` + sqlEffectiveServiceTierExpr + ` AS pricing_service_tier,
+		IFNULL(SUM(` + sqlBillableInputExpr + `),0), IFNULL(SUM(output_tokens),0), IFNULL(SUM(reasoning_tokens),0),
+		IFNULL(SUM(cache_read_tokens),0), IFNULL(SUM(cache_creation_tokens),0), IFNULL(SUM(` + sqlCachedOnlyExpr + `),0)
+		FROM usage_events ` + where + `
+		GROUP BY api_key, api_key_hash, model, alias, pricing_band, pricing_service_tier`
+	rows, err := s.readDB.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[string]float64)
+	for rows.Next() {
+		var apiKey, apiKeyHash, model, alias string
+		var serviceTier string
+		var contextInput int64
+		var billableInput, output, reasoning, cacheRead, cacheCreation, cached int64
+		if err := rows.Scan(&apiKey, &apiKeyHash, &model, &alias, &contextInput, &serviceTier,
+			&billableInput, &output, &reasoning, &cacheRead, &cacheCreation, &cached); err != nil {
+			return nil, err
+		}
+		p, _, ok := ResolvePrice([]string{model, alias}, prices, aliases)
+		if !ok {
+			continue
+		}
+		p = ResolveUsagePrice(p, contextInput, serviceTier)
+		key := APIKeyGroupKey(apiKey, apiKeyHash)
+		out[key] += EstimateCostParts(p, billableInput, output, reasoning, cacheRead, cacheCreation, cached)
+	}
+	return out, rows.Err()
+}
+
+// APIKeyGroupKey builds the grouping key shared by GetAPIKeyStats and CostByAPIKey.
+func APIKeyGroupKey(apiKey, apiKeyHash string) string {
+	return apiKey + "\x00" + apiKeyHash
+}
+
+// GetFilterOptions returns distinct filter values for dropdowns.
+// Each facet is loaded with every other active filter applied, but without its
+// own constraint, so choosing e.g. a provider narrows models/sources/api keys
+// to values that co-occur in usage data while still allowing the user to switch
+// within the same facet.
+func (s *Store) GetFilterOptions(ctx context.Context, filter QueryFilter, fields ...string) (FilterOptions, error) {
+	var out FilterOptions
+	if s == nil {
+		return out, fmt.Errorf("usagestore: nil store")
+	}
+	filter.BeforeID = 0
+	filter.Limit = 0
+	// Free-text search is for event rows, not structured facet menus.
+	filter.Search = ""
+
+	for _, field := range fields {
+		if !slices.Contains([]string{"models", "providers", "auth_indices", "sources", "api_keys", "api_key_hashes"}, field) {
+			return out, fmt.Errorf("unknown filter field %q", field)
+		}
+	}
+	load := func(field, column string, facet QueryFilter) ([]string, error) {
+		if len(fields) > 0 && !slices.Contains(fields, field) {
+			return []string{}, nil
+		}
+		facet.BeforeID = 0
+		facet.Limit = 0
+		facet.Search = ""
+		where, args := buildWhere(facet)
+		var query string
+		if where == "" {
+			query = fmt.Sprintf(`SELECT DISTINCT %s FROM usage_events WHERE IFNULL(%s,'') <> '' ORDER BY %s LIMIT 200`, column, column, column)
+		} else {
+			query = fmt.Sprintf(`SELECT DISTINCT %s FROM usage_events %s AND IFNULL(%s,'') <> '' ORDER BY %s LIMIT 200`, column, where, column, column)
+		}
+		rows, err := s.readDB.QueryContext(ctx, query, args...)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		values := make([]string, 0, 32)
+		for rows.Next() {
+			var v string
+			if err := rows.Scan(&v); err != nil {
+				return nil, err
+			}
+			values = append(values, v)
+		}
+		return values, rows.Err()
+	}
+
+	// Clear only the facet being loaded so other active filters cascade.
+	modelsFacet := filter
+	modelsFacet.Models = nil
+
+	providersFacet := filter
+	providersFacet.Providers = nil
+
+	authFacet := filter
+	authFacet.AuthIndices = nil
+
+	sourcesFacet := filter
+	sourcesFacet.Sources = nil
+
+	apiKeysFacet := filter
+	apiKeysFacet.APIKeys = nil
+
+	apiKeyHashesFacet := filter
+	apiKeyHashesFacet.APIKeyHashes = nil
+
+	var err error
+	if out.Models, err = load("models", "model", modelsFacet); err != nil {
+		return out, err
+	}
+	if out.Providers, err = load("providers", "provider", providersFacet); err != nil {
+		return out, err
+	}
+	if out.AuthIndices, err = load("auth_indices", "auth_index", authFacet); err != nil {
+		return out, err
+	}
+	if out.Sources, err = load("sources", "source", sourcesFacet); err != nil {
+		return out, err
+	}
+	if out.APIKeys, err = load("api_keys", "api_key", apiKeysFacet); err != nil {
+		return out, err
+	}
+	if out.APIKeyHashes, err = load("api_key_hashes", "api_key_hash", apiKeyHashesFacet); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
+// ListDistinctModels returns models seen in events (for unpriced helper).
+func (s *Store) ListDistinctModels(ctx context.Context, fromMS int64, limit int) ([]string, error) {
+	if s == nil {
+		return nil, fmt.Errorf("usagestore: nil store")
+	}
+	if limit <= 0 {
+		limit = 200
+	}
+	args := make([]any, 0, 2)
+	query := `SELECT DISTINCT model FROM usage_events WHERE IFNULL(model,'') <> ''`
+	if fromMS > 0 {
+		query += ` AND timestamp_ms >= ?`
+		args = append(args, fromMS)
+	}
+	query += ` ORDER BY model LIMIT ?`
+	args = append(args, limit)
+	rows, err := s.readDB.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]string, 0, 32)
+	for rows.Next() {
+		var m string
+		if err := rows.Scan(&m); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// AccountRecentRequests contains only the identity and recent outcomes needed by request-row status bars.
+type AccountRecentRequests struct {
+	AuthIndex      string                `json:"auth_index,omitempty"`
+	Source         string                `json:"source,omitempty"`
+	SourceHash     string                `json:"source_hash,omitempty"`
+	Provider       string                `json:"provider,omitempty"`
+	RecentRequests []RecentRequestBucket `json:"recent_requests"`
+}
+
+// GetAccountRecentRequests does not compute range-wide aggregates or load prices.
+func (s *Store) GetAccountRecentRequests(ctx context.Context, filter QueryFilter, accounts []AccountRecentRequests, now time.Time) ([]AccountRecentRequests, error) {
+	if s == nil {
+		return nil, fmt.Errorf("usagestore: nil store")
+	}
+	if len(accounts) > 200 {
+		return nil, fmt.Errorf("at most 200 account groups are allowed")
+	}
+	stats := make([]AccountStat, 0, len(accounts))
+	seen := make(map[string]bool, len(accounts))
+	for _, a := range accounts {
+		key := AccountKey(a.AuthIndex, a.Source, a.SourceHash, a.Provider)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		stats = append(stats, AccountStat{AuthIndex: a.AuthIndex, Source: a.Source, SourceHash: a.SourceHash, Provider: a.Provider})
+	}
+	if err := s.attachAccountRecentRequests(ctx, filter, stats, now); err != nil {
+		return nil, err
+	}
+	out := make([]AccountRecentRequests, 0, len(stats))
+	for _, a := range stats {
+		out = append(out, AccountRecentRequests{AuthIndex: a.AuthIndex, Source: a.Source, SourceHash: a.SourceHash, Provider: a.Provider, RecentRequests: a.RecentRequests})
+	}
+	return out, nil
+}
