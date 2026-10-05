@@ -7,7 +7,7 @@ import (
 )
 
 func TestDefaultPanelSourceIsGremlinLabsFork(t *testing.T) {
-	const want = "https://api.github.com/repos/gremlin-labs/Cli-Proxy-API-Management-Center/releases/latest"
+	const want = "https://api.github.com/repos/gremlin-labs/Cli-Proxy-API-Management-Center-GLE/releases/latest"
 	if got := resolveReleaseURL(""); got != want {
 		t.Fatalf("resolveReleaseURL(\"\") = %q, want %q", got, want)
 	}

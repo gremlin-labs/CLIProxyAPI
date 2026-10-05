@@ -26,7 +26,7 @@ import (
 )
 
 const (
-	defaultManagementReleaseURL = "https://api.github.com/repos/gremlin-labs/Cli-Proxy-API-Management-Center/releases/latest"
+	defaultManagementReleaseURL = "https://api.github.com/repos/gremlin-labs/Cli-Proxy-API-Management-Center-GLE/releases/latest"
 	managementAssetName         = "management.html"
 	httpUserAgent               = "CLIProxyAPI-management-updater"
 	managementSyncMinInterval   = 30 * time.Second
