@@ -1034,10 +1034,7 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 		auth.UpdatedAt = now
 
 		if !result.SkipQuotaObservation {
-			auth.Quota.ObserveResponseHeadersForProvider(result.Provider, responseHeaders, now)
-			if modelState != nil {
-				modelState.Quota.ObserveResponseHeadersForProvider(result.Provider, responseHeaders, now)
-			}
+			observeQuotaHeaders(ctx, auth, modelState, result.Provider, responseHeaders, now)
 		}
 
 		_ = m.persistLocked(ctx, auth)

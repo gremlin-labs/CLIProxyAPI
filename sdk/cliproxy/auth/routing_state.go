@@ -25,6 +25,9 @@ type RoutingState struct {
 type QuotaSnapshot struct {
 	ObservedAt time.Time         `json:"observed_at"`
 	Signals    map[string]string `json:"signals"`
+	// Account identifies the upstream account the signals were observed for, so a
+	// credential re-pointed at another account does not inherit them.
+	Account string `json:"account,omitempty"`
 }
 
 // ExportRoutingState captures quota snapshots and session bindings.
@@ -46,7 +49,7 @@ func (m *Manager) ExportRoutingState(now time.Time) RoutingState {
 		for key, value := range auth.Quota.Signals {
 			signals[key] = value
 		}
-		state.Quota[id] = QuotaSnapshot{ObservedAt: auth.Quota.ObservedAt, Signals: signals}
+		state.Quota[id] = QuotaSnapshot{ObservedAt: auth.Quota.ObservedAt, Signals: signals, Account: quotaAccountIdentity(auth)}
 	}
 	m.mu.RUnlock()
 	if affinity, ok := selector.(*SessionAffinitySelector); ok && affinity.cache != nil {
@@ -56,8 +59,8 @@ func (m *Manager) ExportRoutingState(now time.Time) RoutingState {
 }
 
 // RestoreRoutingState applies a saved state to registered credentials. A quota
-// snapshot only replaces an older (or missing) one, and bindings are restored only
-// for credentials that still exist. It returns the counts restored.
+// snapshot only replaces an older (or missing) one observed for the same account,
+// and bindings are restored only for credentials that still exist. It returns the counts restored.
 func (m *Manager) RestoreRoutingState(state RoutingState, now time.Time) (quotas, pins int) {
 	if m == nil || state.Version != routingStateVersion {
 		return 0, 0
@@ -69,6 +72,9 @@ func (m *Manager) RestoreRoutingState(state RoutingState, now time.Time) (quotas
 			continue
 		}
 		if !snapshot.ObservedAt.After(auth.Quota.ObservedAt) {
+			continue
+		}
+		if account := quotaAccountIdentity(auth); snapshot.Account != "" && account != "" && snapshot.Account != account {
 			continue
 		}
 		signals := make(map[string]string, len(snapshot.Signals))

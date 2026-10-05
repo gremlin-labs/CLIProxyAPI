@@ -276,6 +276,11 @@ func (m *Manager) updateInternal(ctx context.Context, base, auth *Auth, mode upd
 	if m.cooldownDisabledForAuth(auth) || auth.Disabled || auth.Status == StatusDisabled {
 		cooldownStateChanged = clearCooldownStateForAuth(auth, now) || cooldownStateChanged
 	}
+	// The credential now names another account: its observed quota no longer applies.
+	accountChanged := quotaIdentityChanged(existing, auth)
+	if accountChanged {
+		clearPassiveQuotaObservations(auth)
+	}
 	auth.EnsureIndex()
 	// Save before publication, including the transactional Meta mint path.
 	// Runtime-only changes made during I/O are merged below, never overwritten.
@@ -295,6 +300,10 @@ func (m *Manager) updateInternal(ctx context.Context, base, auth *Auth, mode upd
 		return nil, fmt.Errorf("auth %s changed registration during persistence", auth.ID)
 	}
 	mergeAuthSaveDelta(auth, existingBeforeSave, existing, false)
+	if accountChanged {
+		// Observations merged in during the save still describe the old account.
+		clearPassiveQuotaObservations(auth)
+	}
 	if existing.Generation >= auth.Generation {
 		auth.Generation = existing.Generation + 1
 	}
