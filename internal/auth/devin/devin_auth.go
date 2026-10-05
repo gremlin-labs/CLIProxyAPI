@@ -345,7 +345,7 @@ const loginSuccessHTML = `<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Authentication Successful - Devin</title>
+    <title>Authentication Successful - Devin | CLI PROXY GLE</title>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #0f172a; color: #f8fafc; }
         .card { background: #1e293b; padding: 2.5rem; border-radius: 12px; box-shadow: 0 8px 30px rgba(0,0,0,0.4); text-align: center; max-width: 420px; }
@@ -366,7 +366,7 @@ const loginFailureHTML = `<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Authentication Failed - Devin</title>
+    <title>Authentication Failed - Devin | CLI PROXY GLE</title>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #0f172a; color: #f8fafc; }
         .card { background: #1e293b; padding: 2.5rem; border-radius: 12px; box-shadow: 0 8px 30px rgba(0,0,0,0.4); text-align: center; max-width: 420px; }

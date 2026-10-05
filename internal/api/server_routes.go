@@ -34,7 +34,7 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-const oauthCallbackSuccessHTML = `<html><head><meta charset="utf-8"><title>Authentication successful</title><script>setTimeout(function(){window.close();},5000);</script></head><body><h1>Authentication successful!</h1><p>You can close this window.</p><p>This window will close automatically in 5 seconds.</p></body></html>`
+const oauthCallbackSuccessHTML = `<html><head><meta charset="utf-8"><title>Authentication successful | CLI PROXY GLE</title><script>setTimeout(function(){window.close();},5000);</script></head><body><h1>Authentication successful!</h1><p>You can close this window.</p><p>This window will close automatically in 5 seconds.</p></body></html>`
 
 const codexAlphaSearchSourceFormat = "codex-alpha-search"
 
