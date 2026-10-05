@@ -188,3 +188,54 @@ func TestManagerRoutesWithResetAwareSelector(t *testing.T) {
 		}
 	}
 }
+
+func TestReadQuotaWindowsCodexLimitReached(t *testing.T) {
+	codex := func(signals map[string]string) *Auth {
+		return &Auth{ID: "codex", Provider: "codex", Quota: QuotaState{ObservedAt: resetAwareNow, Signals: signals}}
+	}
+	base := func() map[string]string {
+		return map[string]string{
+			"X-Codex-Primary-Used-Percent":     "40",
+			"X-Codex-Primary-Window-Minutes":   "10080",
+			"X-Codex-Primary-Reset-At":         unix(resetAwareNow.Add(48 * time.Hour)),
+			"X-Codex-Secondary-Used-Percent":   "97",
+			"X-Codex-Secondary-Window-Minutes": "300",
+			"X-Codex-Secondary-Reset-At":       unix(resetAwareNow.Add(2 * time.Hour)),
+		}
+	}
+
+	signals := base()
+	signals["X-Codex-Limit-Reached"] = "true"
+	// Credits remaining must not make the credential eligible again.
+	signals["X-Codex-Credits-Has-Credits"] = "true"
+	signals["X-Codex-Credits-Balance"] = "500"
+	windows := readQuotaWindows(codex(signals), resetAwareNow)
+	if !windows.exhausted || windows.shortUtil < 1 || windows.weeklyUtil != 0.4 {
+		t.Fatalf("windows = %+v, want the fuller (short) window marked exhausted", windows)
+	}
+	if relief := earliestRelief(windows); !relief.Equal(resetAwareNow.Add(2 * time.Hour)) {
+		t.Fatalf("relief = %v, want the short window reset", relief)
+	}
+	// Once that window has reset, the stale flag no longer applies.
+	if later := readQuotaWindows(codex(signals), resetAwareNow.Add(3*time.Hour)); later.exhausted {
+		t.Fatalf("windows after reset = %+v, want not exhausted", later)
+	}
+
+	signals = base()
+	signals["X-Codex-Allowed"] = "false"
+	if !readQuotaWindows(codex(signals), resetAwareNow).exhausted {
+		t.Fatal("x-codex-allowed=false should count as exhausted")
+	}
+
+	signals = map[string]string{"X-Codex-Limit-Reached": "true"}
+	windows = readQuotaWindows(codex(signals), resetAwareNow)
+	if !windows.observed || !windows.exhausted {
+		t.Fatalf("windows = %+v, want a bare limit-reached flag to mark the credential exhausted", windows)
+	}
+
+	signals = base()
+	signals["X-Codex-Limit-Reached"] = "false"
+	if readQuotaWindows(codex(signals), resetAwareNow).exhausted {
+		t.Fatal("limit-reached=false must not mark the credential exhausted")
+	}
+}

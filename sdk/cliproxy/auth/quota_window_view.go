@@ -123,7 +123,37 @@ func readCodexQuotaWindows(windows *quotaWindows, signals map[string]string, obs
 			windows.shortUtil, windows.shortResetAt = util, reset
 		}
 	}
+	// Codex reports a hit limit outright. Remaining credits do not count: the user
+	// avoids paid overage, so a credential past its included allowance stays
+	// exhausted whatever its credit balance.
+	if strings.EqualFold(signals["x-codex-limit-reached"], "true") || strings.EqualFold(signals["x-codex-allowed"], "false") {
+		markCodexLimitReached(windows)
+		found = true
+	}
 	return found
+}
+
+// markCodexLimitReached attributes a reported hit limit to the fuller window, so
+// the flag clears when that window resets rather than sticking to the snapshot.
+func markCodexLimitReached(windows *quotaWindows) {
+	switch {
+	case windows.weeklyUtil < 0 && windows.shortUtil < 0:
+		if !windows.weeklyResetAt.IsZero() {
+			windows.weeklyUtil = 1
+		}
+		if !windows.shortResetAt.IsZero() {
+			windows.shortUtil = 1
+		}
+		if windows.weeklyUtil < 0 && windows.shortUtil < 0 {
+			// No window is known at all; keep the credential exhausted until the
+			// next observation replaces this one.
+			windows.weeklyUtil = 1
+		}
+	case windows.weeklyUtil >= windows.shortUtil:
+		windows.weeklyUtil = maxFloat(windows.weeklyUtil, 1)
+	default:
+		windows.shortUtil = maxFloat(windows.shortUtil, 1)
+	}
 }
 
 // rollQuotaWindow advances a reset time that has already passed and treats the
