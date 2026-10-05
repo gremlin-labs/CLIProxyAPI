@@ -766,6 +766,7 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 	modelKey := canonicalModelKey(result.Model)
 
 	var authSnapshot *Auth
+	deactivatedWorkspace := false
 	cooldownStateChanged := false
 	now := time.Now()
 
@@ -1011,6 +1012,24 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 			auth.NextRetryAfter = time.Time{}
 		}
 
+		// A deactivated ChatGPT workspace never recovers by cooling down or refreshing
+		// tokens; disable the credential (as the management toggle would) instead of
+		// retrying it every cooldown. Re-enabling it is a manual action.
+		if !result.Success && isCodexDeactivatedWorkspace(result.Provider, result.Error) {
+			deactivatedWorkspace = true
+			auth.Disabled = true
+			auth.Status = StatusDisabled
+			auth.StatusMessage = codexDeactivatedWorkspaceStatus
+			if auth.Metadata == nil {
+				auth.Metadata = make(map[string]any)
+			}
+			auth.Metadata["disabled"] = true
+			// Match Update for disabled credentials: drop the cooldown this failure just set,
+			// so re-enabling the credential makes it selectable immediately.
+			clearCooldownStateForAuth(auth, now)
+			logEntryWithRequestID(ctx).WithField("auth_id", auth.ID).Warn("codex workspace deactivated; credential disabled")
+		}
+
 		auth.Generation++
 		auth.UpdatedAt = now
 
@@ -1032,13 +1051,13 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 	releaseMutation()
 	if m.scheduler != nil && authSnapshot != nil {
 		var targetModels []string
-		if !result.CredentialScope && modelKey != "" {
+		if !result.CredentialScope && !deactivatedWorkspace && modelKey != "" {
 			targetModels = append(targetModels, modelKey)
 			if routeKey := canonicalModelKey(result.RouteModel); routeKey != "" && routeKey != modelKey {
 				targetModels = append(targetModels, routeKey)
 			}
 		}
-		m.scheduler.upsertAuthResult(authSnapshot, targetModels, result.CredentialScope)
+		m.scheduler.upsertAuthResult(authSnapshot, targetModels, result.CredentialScope || deactivatedWorkspace)
 	}
 	if authSnapshot != nil && cooldownStateChanged {
 		m.persistCooldownStates(context.Background())
@@ -1800,6 +1819,19 @@ func isCredentialScopedError(err error) bool {
 	}
 	var csp credentialScopedProvider
 	return errors.As(err, &csp) && csp != nil && csp.IsCredentialScoped()
+}
+
+const codexDeactivatedWorkspaceStatus = "disabled (codex workspace deactivated)"
+
+// isCodexDeactivatedWorkspace reports a Codex rejection for a deactivated ChatGPT
+// workspace (HTTP 402 with detail code deactivated_workspace). Other 402s, such as a
+// temporary billing failure, keep the ordinary cooldown.
+func isCodexDeactivatedWorkspace(provider string, err *Error) bool {
+	if err == nil || !strings.EqualFold(strings.TrimSpace(provider), "codex") {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(err.Code), "deactivated_workspace") ||
+		strings.Contains(strings.ToLower(err.Message), "deactivated_workspace")
 }
 
 func statusCodeFromResult(err *Error) int {
