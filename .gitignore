@@ -67,3 +67,7 @@ docker-compose.override.yml
 
 # Local LLM Wiki vault
 .llm-wiki
+
+# Local usage analytics database (Request Monitoring)
+usage.db
+usage.db-*
