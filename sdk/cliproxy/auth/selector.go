@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -1116,6 +1117,15 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 				return auth, nil
 			}
 		}
+		// A Codex thread whose input carries encrypted reasoning or compaction items
+		// can only be continued by the account that produced them: any other account
+		// rejects the request. Wait for the bound credential instead of moving.
+		if carriesCodexEncryptedState(provider, opts.OriginalRequest) {
+			if resetIn, hold := s.holdEncryptedThread(cachedAuthID, auths, model, now); hold {
+				entry.Infof("session-affinity: bound auth unavailable, holding thread with encrypted state | session=%s bound=%s provider=%s model=%s reset_in=%s", truncateSessionID(primaryID), cachedAuthID, provider, model, resetIn)
+				return nil, newModelCooldownError(model, provider, resetIn)
+			}
+		}
 		// Cached auth not available. Keep using the current detour credential when
 		// there is one, so the thread does not scatter across the pool meanwhile.
 		auth := s.detourAuth(cacheKey, fallbackAuths)
@@ -1170,6 +1180,57 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 		entry.Infof("session-affinity: cache miss, new binding | session=%s auth=%s provider=%s model=%s", truncateSessionID(primaryID), auth.ID, provider, model)
 	}
 	return auth, nil
+}
+
+// holdEncryptedThread reports whether a thread pinned to boundID should wait for it
+// rather than move, and how long until it is usable again. A removed, disabled or
+// weight-excluded credential cannot come back, so the thread moves as usual.
+func (s *SessionAffinitySelector) holdEncryptedThread(boundID string, auths []*Auth, model string, now time.Time) (time.Duration, bool) {
+	var bound *Auth
+	for _, auth := range auths {
+		if auth != nil && auth.ID == boundID {
+			bound = auth
+			break
+		}
+	}
+	if bound == nil {
+		auth, found, canLookup := s.lookupAuth(boundID)
+		if !canLookup || !found || auth == nil {
+			return 0, false
+		}
+		bound = auth
+	}
+	if bound.Disabled || bound.Status == StatusDisabled {
+		return 0, false
+	}
+	if _, weighted := s.fallback.(*WeightedRoundRobinSelector); weighted && authWeight(bound) <= 0 {
+		return 0, false
+	}
+	blocked, reason, until := isAuthBlockedForModel(bound, model, now)
+	if blocked && reason == blockReasonDisabled {
+		return 0, false
+	}
+	if !blocked {
+		until = latestModelCooldown(bound, now)
+	}
+	if until.IsZero() || !until.After(now) {
+		return 0, true
+	}
+	return until.Sub(now), true
+}
+
+// carriesCodexEncryptedState reports whether a Codex request replays encrypted
+// reasoning or compaction items, which are bound to the producing account.
+func carriesCodexEncryptedState(provider string, payload []byte) bool {
+	if !strings.EqualFold(strings.TrimSpace(provider), "codex") || !bytes.Contains(payload, []byte(`"encrypted_content"`)) {
+		return false
+	}
+	for _, item := range gjson.GetBytes(payload, "input").Array() {
+		if item.Get("encrypted_content").String() != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *SessionAffinitySelector) clock() time.Time {
