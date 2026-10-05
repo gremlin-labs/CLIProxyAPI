@@ -123,6 +123,7 @@ func ParseConfigBytes(data []byte) (*Config, error) {
 	cfg.SanitizeOAuthModelAlias()
 	cfg.SanitizeOAuthSettings()
 	cfg.SanitizeOAuthRequestScopedErrors()
+	cfg.SanitizeModelContextOverrides()
 	cfg.SanitizePayloadRules()
 
 	return &cfg, nil

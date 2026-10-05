@@ -146,6 +146,42 @@ func (cfg *Config) SanitizeOAuthSettings() {
 	cfg.OAuthSettings = out
 }
 
+// SanitizeModelContextOverrides trims model IDs, drops entries without a usable
+// value, clamps negatives to zero, and keeps the last entry for duplicate models.
+func (cfg *Config) SanitizeModelContextOverrides() {
+	if cfg == nil || len(cfg.ModelContextOverrides) == 0 {
+		return
+	}
+
+	seen := make(map[string]int, len(cfg.ModelContextOverrides))
+	out := make([]ModelContextOverride, 0, len(cfg.ModelContextOverrides))
+	for _, override := range cfg.ModelContextOverrides {
+		override.Model = strings.TrimSpace(override.Model)
+		if override.Model == "" {
+			continue
+		}
+		if override.ContextLength < 0 {
+			override.ContextLength = 0
+		}
+		if override.MaxCompletionTokens < 0 {
+			override.MaxCompletionTokens = 0
+		}
+		if override.ContextLength == 0 && override.MaxCompletionTokens == 0 {
+			continue
+		}
+		key := strings.ToLower(override.Model)
+		if idx, ok := seen[key]; ok {
+			out[idx] = override
+			continue
+		}
+		seen[key] = len(out)
+		out = append(out, override)
+	}
+
+	// Keep a non-nil empty slice so an emptied list still serializes to disk.
+	cfg.ModelContextOverrides = out
+}
+
 // SanitizeOAuthRequestScopedErrors normalizes and validates global OAuth request-scoped error rules.
 // It trims whitespace, normalizes channel keys to lower-case, validates status/action, and drops invalid rules.
 func (cfg *Config) SanitizeOAuthRequestScopedErrors() {

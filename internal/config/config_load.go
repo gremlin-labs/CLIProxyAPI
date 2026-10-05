@@ -206,6 +206,9 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 	// Normalize global OAuth request-scoped error rules.
 	cfg.SanitizeOAuthRequestScopedErrors()
 
+	// Normalize manual model context windows.
+	cfg.SanitizeModelContextOverrides()
+
 	// Validate raw payload rules and drop invalid entries.
 	cfg.SanitizePayloadRules()
 

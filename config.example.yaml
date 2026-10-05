@@ -183,6 +183,16 @@ routing:
   # When true, unprefixed model requests only use credentials without a prefix (except when prefix == model name).
   force-model-prefix: false
 
+  # Manual model context windows. The bundled model catalog is matched by exact model
+  # ID, so custom providers that use non-standard model names advertise no context
+  # window in /v1/models. Set one here (or from the management panel's Model Context
+  # page, which lists every model that is still missing one). Matching is
+  # case-insensitive; values <= 0 are ignored.
+  # model-context-overrides:
+  #   - model: "my-provider/custom-llm"
+  #     context-length: 262144
+  #     max-completion-tokens: 8192
+
   retry:
     # Number of additional credential retry rounds after the first round exhausts
     # its eligible credentials. Round 0 is the initial round; round r only admits

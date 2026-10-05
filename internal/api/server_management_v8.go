@@ -31,6 +31,12 @@ func (s *Server) registerManagementV8Routes() {
 	v8.POST("/requests/api-call", s.mgmt.APICall)
 	v8.POST("/routing/cooldown/reset", s.mgmt.ResetQuota)
 	v8.GET("/routing/model-definitions/:channel", s.mgmt.GetStaticModelDefinitions)
+	v8.GET("/routing/model-sources", s.mgmt.GetModelSources)
+	v8.GET("/routing/model-context-status", s.mgmt.GetModelContextStatus)
+	v8.GET("/routing/model-context-overrides", s.mgmt.GetModelContextOverrides)
+	v8.PUT("/routing/model-context-overrides", s.mgmt.PutModelContextOverrides)
+	v8.PATCH("/routing/model-context-overrides", s.mgmt.PatchModelContextOverride)
+	v8.DELETE("/routing/model-context-overrides", s.mgmt.DeleteModelContextOverride)
 
 	v8.GET("/observability/logs", s.mgmt.GetLogs)
 	v8.DELETE("/observability/logs", s.mgmt.DeleteLogs)

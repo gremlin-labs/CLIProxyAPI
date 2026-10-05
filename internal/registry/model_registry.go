@@ -266,9 +266,9 @@ func LookupModelInfo(modelID string, provider ...string) *ModelInfo {
 	}
 
 	if info := GetGlobalRegistry().GetModelInfo(modelID, p); info != nil {
-		return cloneModelInfo(info)
+		return applyContextOverride(cloneModelInfo(info))
 	}
-	return cloneModelInfo(LookupStaticModelInfo(modelID))
+	return applyContextOverride(cloneModelInfo(LookupStaticModelInfo(modelID)))
 }
 
 // NativeCapabilityRoute describes one registered route to a public model.
@@ -1675,6 +1675,10 @@ func (r *ModelRegistry) convertModelToMap(model *ModelInfo, handlerType string) 
 	if model == nil {
 		return nil
 	}
+
+	// Operator-supplied context windows win over catalog metadata, which is the
+	// only source for custom providers whose model names match no catalog entry.
+	model = applyContextOverride(model)
 
 	switch handlerType {
 	case "openai":

@@ -188,6 +188,15 @@ type Config struct {
 	// NOTE: This applies only to OAuth credentials and does not affect per-credential request-scoped-errors under *-api-key.
 	OAuthRequestScopedErrors map[string][]RequestScopedErrorRule `yaml:"oauth-request-scoped-errors,omitempty" json:"oauth-request-scoped-errors,omitempty"`
 
+	// ModelContextOverrides defines manual context window metadata for models whose
+	// values cannot be resolved from the bundled model catalog. Custom providers often
+	// use model names that match no catalog entry, so no context window is advertised
+	// for them; clients that size requests from the advertised window need a value.
+	//
+	// Note: no omitempty. Emptying the list must be written to disk, otherwise a
+	// deleted override would silently survive in the on-disk config.
+	ModelContextOverrides []ModelContextOverride `yaml:"model-context-overrides" json:"model-context-overrides"`
+
 	// OAuthSettings defines per-channel model settings (such as max-context-length) applied to OAuth/file-backed auth entries.
 	OAuthSettings map[string][]OAuthModelSetting `yaml:"oauth-settings,omitempty" json:"oauth-settings,omitempty"`
 

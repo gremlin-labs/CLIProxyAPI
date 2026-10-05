@@ -402,6 +402,19 @@ type OAuthModelAlias struct {
 	ForceMapping bool `yaml:"force-mapping,omitempty" json:"force-mapping,omitempty"`
 }
 
+// ModelContextOverride assigns a manual context window to a single model ID.
+type ModelContextOverride struct {
+	// Model is the model ID as advertised by the proxy (alias after prefixing).
+	// Matching is case-insensitive.
+	Model string `yaml:"model" json:"model"`
+
+	// ContextLength is the context window in tokens. Values <= 0 are ignored.
+	ContextLength int `yaml:"context-length,omitempty" json:"context-length,omitempty"`
+
+	// MaxCompletionTokens is the maximum completion size in tokens. Values <= 0 are ignored.
+	MaxCompletionTokens int `yaml:"max-completion-tokens,omitempty" json:"max-completion-tokens,omitempty"`
+}
+
 // OAuthModelSetting defines provider/channel model settings (such as context window overrides) for OAuth credentials.
 type OAuthModelSetting struct {
 	Name  string `yaml:"name" json:"name"`
