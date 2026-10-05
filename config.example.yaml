@@ -1199,6 +1199,19 @@ observability:
     enable: false
     addr: "127.0.0.1:8316"
 
+  # Model benchmark data (intelligence/coding/agentic indices, prices, speed) for the
+  # management panel, from the Artificial Analysis Data API (https://artificialanalysis.ai).
+  # The key stays on the server; the panel reads /v8/management/observability/model-intelligence.
+  # Legacy layout spelling: a top-level "model-intelligence:" section with the same keys.
+  # model-intelligence:
+  #   # API key from https://artificialanalysis.ai. When empty, the
+  #   # ARTIFICIAL_ANALYSIS_API_KEY environment variable is used.
+  #   artificial-analysis-api-key: ""
+  #   # "free" (default, /language/models/free, 100 requests/day) or "pro" (/language/models).
+  #   artificial-analysis-tier: "free"
+  #   # How long fetched data is cached in memory (Go duration). Default: 6h.
+  #   cache-ttl: "6h"
+
 # Standard dynamic library plugins are trusted in-process code. They are disabled by default.
 # Build Go examples with go build -buildmode=c-shared for the target GOOS/GOARCH.
 # Other languages can implement the same C ABI and JSON method protocol.

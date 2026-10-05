@@ -210,6 +210,10 @@ type Config struct {
 	// deleted override would silently survive in the on-disk config.
 	ModelContextOverrides []ModelContextOverride `yaml:"model-context-overrides" json:"model-context-overrides"`
 
+	// ModelIntelligence configures the management-only model benchmark feed
+	// (Artificial Analysis). The API key never leaves the server.
+	ModelIntelligence ModelIntelligenceConfig `yaml:"model-intelligence,omitempty" json:"model-intelligence"`
+
 	// OAuthSettings defines per-channel model settings (such as max-context-length) applied to OAuth/file-backed auth entries.
 	OAuthSettings map[string][]OAuthModelSetting `yaml:"oauth-settings,omitempty" json:"oauth-settings,omitempty"`
 

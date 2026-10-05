@@ -229,6 +229,8 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.PUT("/model-context-overrides", s.mgmt.PutModelContextOverrides)
 		mgmt.PATCH("/model-context-overrides", s.mgmt.PatchModelContextOverride)
 		mgmt.DELETE("/model-context-overrides", s.mgmt.DeleteModelContextOverride)
+		mgmt.GET("/model-intelligence", s.mgmt.GetModelIntelligence)
+		mgmt.PUT("/model-intelligence/config", s.mgmt.PutModelIntelligenceConfig)
 		mgmt.GET("/auth-files/download", s.mgmt.DownloadAuthFile)
 		mgmt.POST("/auth-files", s.mgmt.UploadAuthFile)
 		mgmt.DELETE("/auth-files", s.mgmt.DeleteAuthFile)

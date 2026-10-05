@@ -66,6 +66,8 @@ func (s *Server) registerManagementV8Routes() {
 	v8.PUT("/observability/usage/model-price-aliases", s.mgmt.PutModelPriceAliases)
 	v8.PATCH("/observability/usage/model-price-aliases", s.mgmt.PutModelPriceAliases)
 	v8.DELETE("/observability/usage/model-price-aliases", s.mgmt.DeleteModelPriceAlias)
+	v8.GET("/observability/model-intelligence", s.mgmt.GetModelIntelligence)
+	v8.PUT("/observability/model-intelligence/config", s.mgmt.PutModelIntelligenceConfig)
 
 	v8.GET("/credentials", s.mgmt.ListAuthFiles)
 	v8.POST("/credentials", s.mgmt.UploadAuthFile)
