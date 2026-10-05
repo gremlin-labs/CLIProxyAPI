@@ -105,6 +105,11 @@ type Auth struct {
 
 	recentRequests recentRequestRing `json:"-"`
 	indexAssigned  bool              `json:"-"`
+
+	// codexUsageLimitHits and codexAuthFailureHits count consecutive Codex failures for
+	// the opt-in failure policy (see codex_policy.go). Runtime only; reset on success.
+	codexUsageLimitHits  int `json:"-"`
+	codexAuthFailureHits int `json:"-"`
 }
 
 const (

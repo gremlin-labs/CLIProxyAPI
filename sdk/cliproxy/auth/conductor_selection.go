@@ -631,6 +631,9 @@ func (m *Manager) availableAuthsForRouteModelWithPriorityMode(auths []*Auth, pro
 		return nil, newAuthUnavailableErrorWithCause(earliest, now, lastCandidateErr)
 	}
 
+	if m.codexPreferFreeEnabled() {
+		availableByPriority = preferFreeCodexBuckets(availableByPriority)
+	}
 	return availableAuthsFromPriorityBuckets(availableByPriority, allPriorities), nil
 }
 
@@ -1657,6 +1660,10 @@ func (m *Manager) CloseExecutionSession(sessionID string) {
 
 func (m *Manager) useSchedulerFastPath() bool {
 	if m == nil || m.scheduler == nil {
+		return false
+	}
+	// The scheduler does not implement the Codex Free-plan preference; the legacy path does.
+	if m.codexPreferFreeEnabled() {
 		return false
 	}
 	return isBuiltInSelector(m.Selector())

@@ -1081,6 +1081,31 @@ oauth:
         #     username: "user"
         #     credential: "secret"
 
+      # Custom instructions (management: /v0/management/codex-instructions).
+      # When enabled, the text is merged into the instructions of every Codex request whose
+      # model matches `models`. Payload rules still apply last.
+      # instructions:
+      #   enabled: false
+      #   mode: prepend      # prepend | append | replace
+      #   content: ""        # inline text; wins over file
+      #   file: ""           # local file read when content is empty
+      #   models: []         # glob patterns, e.g. ["gpt-5*"]; empty = all Codex models
+      #   oauth-only: true   # inject only on Codex OAuth credentials
+
+      # Codex routing preferences (management: /v0/management/codex-routing-config).
+      # routing:
+      #   # Prefer Free-plan Codex credentials while one is available for the model.
+      #   prefer-free-for-shared-models: false
+      #   # Accepted for panel compatibility only; selection always follows routing.strategy.
+      #   strategy: ""
+
+      # Codex credential failure policy (management: /v0/management/codex-failure-config).
+      # All knobs are off by default; existing cooldowns and quota fencing apply unchanged.
+      # auto-disable-auth-failures: false     # disable after consecutive hard auth failures
+      # auth-failure-disable-after: 1
+      # usage-limit-disable-after: 0          # disable after N consecutive usage limits (0 = off)
+      # usage-limit-cooldown-fallback-hours: 0 # cooldown when usage_limit_reached has no reset time
+
       # Default headers for Codex OAuth model requests.
       # These are used only for file-backed/OAuth Codex requests when the client
       # does not send the header. `user-agent` applies to HTTP and websocket requests;

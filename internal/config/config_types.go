@@ -217,6 +217,22 @@ type CodexConfig struct {
 	// ResponseSteering enables full-duplex Codex WebSockets, bound to one
 	// upstream model/account/socket for their entire lifetime. Default is false.
 	ResponseSteering bool `yaml:"response-steering" json:"response-steering"`
+	// Instructions configures operator instructions merged into Codex requests.
+	Instructions CodexInstructionsConfig `yaml:"instructions,omitempty" json:"instructions,omitempty"`
+	// Routing holds Codex-specific credential routing preferences.
+	Routing CodexRoutingConfig `yaml:"routing,omitempty" json:"routing,omitempty"`
+	// AutoDisableAuthFailures disables a Codex credential after AuthFailureDisableAfter
+	// consecutive hard auth failures (surviving 401 after the refresh retry, invalid_grant,
+	// revoked or reused refresh tokens). Default false.
+	AutoDisableAuthFailures *bool `yaml:"auto-disable-auth-failures,omitempty" json:"auto-disable-auth-failures,omitempty"`
+	// AuthFailureDisableAfter is the hard auth failure threshold. Default 1; 0 disables.
+	AuthFailureDisableAfter *int `yaml:"auth-failure-disable-after,omitempty" json:"auth-failure-disable-after,omitempty"`
+	// UsageLimitDisableAfter disables a Codex credential after this many consecutive
+	// usage_limit_reached rejections, counted once per cooldown window. Default 0 (off).
+	UsageLimitDisableAfter *int `yaml:"usage-limit-disable-after,omitempty" json:"usage-limit-disable-after,omitempty"`
+	// UsageLimitCooldownFallbackHours is the cooldown applied to usage_limit_reached when
+	// the upstream supplies no reset time. Default 0 keeps the progressive quota backoff.
+	UsageLimitCooldownFallbackHours *int `yaml:"usage-limit-cooldown-fallback-hours,omitempty" json:"usage-limit-cooldown-fallback-hours,omitempty"`
 }
 
 // DefaultCodexStreamBootstrapTimeout is the default maximum duration to buffer bootstrap events.

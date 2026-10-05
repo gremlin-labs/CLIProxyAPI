@@ -163,6 +163,17 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.PATCH("/desensitization-config", s.mgmt.PutDesensitizationConfig)
 		mgmt.GET("/desensitization/scope-options", s.mgmt.GetDesensitizationScopeOptions)
 		mgmt.POST("/desensitization/preview", s.mgmt.PreviewDesensitization)
+		// Codex Config page. Under /v8/management these settings are reached through
+		// the generic config tree at /config/oauth/providers/codex/...
+		mgmt.GET("/codex-instructions", s.mgmt.GetCodexInstructions)
+		mgmt.PUT("/codex-instructions", s.mgmt.PutCodexInstructions)
+		mgmt.PATCH("/codex-instructions", s.mgmt.PutCodexInstructions)
+		mgmt.GET("/codex-routing-config", s.mgmt.GetCodexRoutingConfig)
+		mgmt.PUT("/codex-routing-config", s.mgmt.PutCodexRoutingConfig)
+		mgmt.PATCH("/codex-routing-config", s.mgmt.PutCodexRoutingConfig)
+		mgmt.GET("/codex-failure-config", s.mgmt.GetCodexFailureConfig)
+		mgmt.PUT("/codex-failure-config", s.mgmt.PutCodexFailureConfig)
+		mgmt.PATCH("/codex-failure-config", s.mgmt.PutCodexFailureConfig)
 
 		mgmt.GET("/claude-api-key", s.mgmt.GetClaudeKeys)
 		mgmt.PUT("/claude-api-key", s.mgmt.PutClaudeKeys)
