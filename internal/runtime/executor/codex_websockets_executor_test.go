@@ -3290,3 +3290,57 @@ func TestCodexWebsockets_SendErrorLogsSessionObject(t *testing.T) {
 		t.Fatalf("expected reason=send_error in log output, got: %s", logOutput)
 	}
 }
+
+// A frame at the upstream size limit is refused before it is uploaded, with the same
+// request-scoped message_too_big error a 1009 close produces (idea from power12317 eb30e8f44).
+func TestCodexWebsocketsExecuteStreamRefusesOversizedFrameBeforeUpload(t *testing.T) {
+	var frames atomic.Int32
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		conn.SetReadLimit(64 << 20)
+		for {
+			if _, _, errRead := conn.ReadMessage(); errRead != nil {
+				return
+			}
+			frames.Add(1)
+		}
+	}))
+	defer server.Close()
+
+	exec := NewCodexWebsocketsExecutor(&config.Config{SDKConfig: config.SDKConfig{DisableImageGeneration: config.DisableImageGenerationAll}})
+	auth := &cliproxyauth.Auth{Attributes: map[string]string{"api_key": "sk-test", "base_url": server.URL}}
+	payload := append([]byte(`{"model":"gpt-5-codex","input":[{"type":"message","role":"user","content":"`), bytes.Repeat([]byte("x"), codexWebsocketMessageSizeLimit)...)
+	payload = append(payload, []byte(`"}]}`)...)
+	req := cliproxyexecutor.Request{Model: "gpt-5-codex", Payload: payload}
+	opts := cliproxyexecutor.Options{
+		SourceFormat:   sdktranslator.FromString("openai-response"),
+		ResponseFormat: sdktranslator.FromString("openai-response"),
+	}
+
+	result, err := exec.ExecuteStream(context.Background(), auth, req, opts)
+	if err == nil {
+		for chunk := range result.Chunks {
+			if chunk.Err != nil {
+				err = chunk.Err
+				break
+			}
+		}
+	}
+	if err == nil {
+		t.Fatal("oversized frame was not refused")
+	}
+	if got := gjson.Get(err.Error(), "error.code").String(); got != "message_too_big" {
+		t.Fatalf("error code = %q, want message_too_big; err=%v", got, err)
+	}
+	if requestErr, ok := err.(interface{ IsRequestScoped() bool }); !ok || !requestErr.IsRequestScoped() {
+		t.Fatalf("error should be request scoped, got %T", err)
+	}
+	if got := frames.Load(); got != 0 {
+		t.Fatalf("upstream received %d frames, want 0", got)
+	}
+}

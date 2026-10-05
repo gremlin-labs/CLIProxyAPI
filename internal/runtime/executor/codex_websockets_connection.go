@@ -77,7 +77,17 @@ func writeWebsocketPayloadMessage(provider string, sess *codexWebsocketSession, 
 	return errSend
 }
 
+// codexWebsocketMessageSizeLimit is the largest request frame the Codex websocket
+// accepts; bigger frames are closed with 1009 after the upload completes.
+const codexWebsocketMessageSizeLimit = 16 << 20
+
 func writeCodexWebsocketMessage(sess *codexWebsocketSession, conn *websocket.Conn, payload []byte) error {
+	if len(payload) >= codexWebsocketMessageSizeLimit {
+		// Refuse before uploading: the client receives the same message_too_big / 1009
+		// signal it would get from upstream and falls back to POST/SSE itself, which
+		// keeps its own transport state consistent.
+		return newCodexWebsocketMessageTooBigError()
+	}
 	return writeWebsocketPayloadMessage("codex", sess, conn, payload)
 }
 
@@ -115,12 +125,16 @@ func mapCodexWebsocketReadError(err error) error {
 	}
 	var closeErr *websocket.CloseError
 	if errors.As(err, &closeErr) && closeErr.Code == websocket.CloseMessageTooBig {
-		return codexWebsocketMessageTooBigError{statusErr: statusErr{
-			code: http.StatusRequestEntityTooLarge,
-			msg:  `{"error":{"message":"upstream websocket message too big","type":"invalid_request_error","code":"message_too_big"}}`,
-		}}
+		return newCodexWebsocketMessageTooBigError()
 	}
 	return err
+}
+
+func newCodexWebsocketMessageTooBigError() error {
+	return codexWebsocketMessageTooBigError{statusErr: statusErr{
+		code: http.StatusRequestEntityTooLarge,
+		msg:  `{"error":{"message":"upstream websocket message too big","type":"invalid_request_error","code":"message_too_big"}}`,
+	}}
 }
 
 func normalizeCodexWebsocketParallelToolCalls(body []byte, headers http.Header) []byte {
