@@ -3,6 +3,7 @@ package management
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -168,5 +169,76 @@ func TestDeleteAuthFile_RemovesRuntimeAuth(t *testing.T) {
 	}
 	if _, ok := manager.GetByID(record.ID); ok {
 		t.Fatalf("expected runtime auth %q to be removed", record.ID)
+	}
+}
+
+type retryDeleteStore struct {
+	memoryAuthStore
+	calls int
+}
+
+func (s *retryDeleteStore) Delete(ctx context.Context, id string) error {
+	s.calls++
+	if s.calls == 1 {
+		return errors.New("temporary token store failure")
+	}
+	return s.memoryAuthStore.Delete(ctx, id)
+}
+
+func TestDeleteCredential_RetryCompletesAfterFileRemoval(t *testing.T) {
+	authDir := t.TempDir()
+	name := "retry.json"
+	path := filepath.Join(authDir, name)
+	if errWrite := os.WriteFile(path, []byte(`{"type":"codex"}`), 0600); errWrite != nil {
+		t.Fatal(errWrite)
+	}
+	manager := coreauth.NewManager(nil, nil, nil)
+	record := &coreauth.Auth{ID: name, FileName: name, Provider: "codex", Attributes: map[string]string{"path": path}}
+	if _, errRegister := manager.Register(context.Background(), record); errRegister != nil {
+		t.Fatal(errRegister)
+	}
+	store := &retryDeleteStore{}
+	store.items = map[string]*coreauth.Auth{path: record}
+	h := NewHandlerWithoutConfigFilePath(&config.Config{AuthDir: authDir}, manager)
+	h.tokenStore = store
+	request := func() *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		ctx, _ := gin.CreateTestContext(rec)
+		ctx.Request = httptest.NewRequest(http.MethodDelete, "/v8/management/credentials?name="+url.QueryEscape(name), nil)
+		h.DeleteCredential(ctx)
+		return rec
+	}
+	if rec := request(); rec.Code != http.StatusInternalServerError {
+		t.Fatalf("first status %d, body %s", rec.Code, rec.Body.String())
+	}
+	if _, errStat := os.Stat(path); !os.IsNotExist(errStat) {
+		t.Fatalf("file should be removed: %v", errStat)
+	}
+	if store.items[path] == nil {
+		t.Fatal("failed store deletion should retain record")
+	}
+	if rec := request(); rec.Code != http.StatusOK {
+		t.Fatalf("retry status %d, body %s", rec.Code, rec.Body.String())
+	}
+	if store.items[path] != nil {
+		t.Fatal("retry should remove stored token")
+	}
+	if _, ok := manager.GetByID(name); ok {
+		t.Fatal("retry should remove runtime credential")
+	}
+	if store.calls != 2 {
+		t.Fatalf("store calls %d", store.calls)
+	}
+}
+
+func TestDeleteAuthFile_MissingFileKeepsLegacyNotFound(t *testing.T) {
+	h := NewHandlerWithoutConfigFilePath(&config.Config{AuthDir: t.TempDir()}, coreauth.NewManager(nil, nil, nil))
+	h.tokenStore = &memoryAuthStore{}
+	rec := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(rec)
+	ctx.Request = httptest.NewRequest(http.MethodDelete, "/v0/management/auth-files?name=missing.json", nil)
+	h.DeleteAuthFile(ctx)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status %d, body %s", rec.Code, rec.Body.String())
 	}
 }

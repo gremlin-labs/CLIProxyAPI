@@ -130,6 +130,16 @@ func (h *Handler) UploadAuthFile(c *gin.Context) {
 
 // Delete auth files: single by name or all
 func (h *Handler) DeleteAuthFile(c *gin.Context) {
+	h.deleteAuthFiles(c, false)
+}
+
+// DeleteCredential allows a v8 deletion retry to finish token-store cleanup even
+// when an earlier attempt already removed the local credential file.
+func (h *Handler) DeleteCredential(c *gin.Context) {
+	h.deleteAuthFiles(c, true)
+}
+
+func (h *Handler) deleteAuthFiles(c *gin.Context, allowMissingFile bool) {
 	if h.authManager == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "core auth manager unavailable"})
 		return
@@ -179,7 +189,7 @@ func (h *Handler) DeleteAuthFile(c *gin.Context) {
 		return
 	}
 	if len(names) == 1 {
-		if _, status, errDelete := h.deleteAuthFileByName(ctx, names[0]); errDelete != nil {
+		if _, status, errDelete := h.deleteAuthFileByName(ctx, names[0], allowMissingFile); errDelete != nil {
 			c.JSON(status, gin.H{"error": errDelete.Error()})
 			return
 		}
@@ -190,7 +200,7 @@ func (h *Handler) DeleteAuthFile(c *gin.Context) {
 	deletedFiles := make([]string, 0, len(names))
 	failed := make([]gin.H, 0)
 	for _, name := range names {
-		deletedName, _, errDelete := h.deleteAuthFileByName(ctx, name)
+		deletedName, _, errDelete := h.deleteAuthFileByName(ctx, name, allowMissingFile)
 		if errDelete != nil {
 			failed = append(failed, gin.H{"name": name, "error": errDelete.Error()})
 			continue
@@ -344,7 +354,7 @@ func uniqueAuthFileNames(names []string) []string {
 	return out
 }
 
-func (h *Handler) deleteAuthFileByName(ctx context.Context, name string) (string, int, error) {
+func (h *Handler) deleteAuthFileByName(ctx context.Context, name string, allowMissingFile bool) (string, int, error) {
 	name = strings.TrimSpace(name)
 	if isUnsafeAuthFileName(name) {
 		return "", http.StatusBadRequest, fmt.Errorf("invalid name")
@@ -368,9 +378,12 @@ func (h *Handler) deleteAuthFileByName(ctx context.Context, name string) (string
 	}
 	if errRemove := os.Remove(targetPath); errRemove != nil {
 		if os.IsNotExist(errRemove) {
-			return filepath.Base(name), http.StatusNotFound, errAuthFileNotFound
+			if !allowMissingFile {
+				return filepath.Base(name), http.StatusNotFound, errAuthFileNotFound
+			}
+		} else {
+			return filepath.Base(name), http.StatusInternalServerError, fmt.Errorf("failed to remove file: %w", errRemove)
 		}
-		return filepath.Base(name), http.StatusInternalServerError, fmt.Errorf("failed to remove file: %w", errRemove)
 	}
 	if errDeleteRecord := h.deleteTokenRecord(ctx, targetPath); errDeleteRecord != nil {
 		return filepath.Base(name), http.StatusInternalServerError, errDeleteRecord
