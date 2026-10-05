@@ -188,10 +188,6 @@ func FilePath(configFilePath string) string {
 // EnsureLatestManagementHTML checks the latest management.html asset and updates the local copy when needed.
 // It coalesces concurrent sync attempts and returns whether the asset exists after the sync attempt.
 func EnsureLatestManagementHTML(ctx context.Context, staticDir string, proxyURL string, panelRepository string) bool {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-
 	staticDir = strings.TrimSpace(staticDir)
 	if staticDir == "" {
 		log.Debug("management asset sync skipped: empty static directory")
@@ -215,57 +211,84 @@ func EnsureLatestManagementHTML(ctx context.Context, staticDir string, proxyURL 
 		lastUpdateCheckTime = now
 		lastUpdateCheckMu.Unlock()
 
-		if errMkdirAll := os.MkdirAll(staticDir, 0o755); errMkdirAll != nil {
-			log.WithError(errMkdirAll).Warn("failed to prepare static directory for management asset")
-			return nil, nil
+		// No unverified fallback: a missing panel is fetched again on the next
+		// access or scheduled check rather than replaced by a page from elsewhere.
+		if errSync := syncManagementHTML(ctx, staticDir, newHTTPClient(proxyURL), resolveReleaseURL(panelRepository), false); errSync != nil {
+			log.WithError(errSync).Warn("management asset sync failed")
 		}
-
-		releaseURL := resolveReleaseURL(panelRepository)
-		client := newHTTPClient(proxyURL)
-
-		localHash, err := fileSHA256(localPath)
-		if err != nil {
-			if !errors.Is(err, os.ErrNotExist) {
-				log.WithError(err).Debug("failed to read local management asset hash")
-			}
-			localHash = ""
-		}
-
-		asset, remoteHash, err := fetchLatestAsset(ctx, client, releaseURL)
-		if err != nil {
-			// No unverified fallback: a missing panel is fetched again on the next
-			// access or scheduled check rather than replaced by a page from elsewhere.
-			log.WithError(err).Warn("failed to fetch latest management release information")
-			return nil, nil
-		}
-
-		if remoteHash != "" && localHash != "" && strings.EqualFold(remoteHash, localHash) {
-			log.Debug("management asset is already up to date")
-			return nil, nil
-		}
-
-		data, downloadedHash, err := downloadAsset(ctx, client, asset.BrowserDownloadURL)
-		if err != nil {
-			log.WithError(err).Warn("failed to download management asset")
-			return nil, nil
-		}
-
-		if remoteHash != "" && !strings.EqualFold(remoteHash, downloadedHash) {
-			log.Errorf("management asset digest mismatch: expected %s got %s — aborting update for safety", remoteHash, downloadedHash)
-			return nil, nil
-		}
-
-		if err = atomicWriteFile(localPath, data); err != nil {
-			log.WithError(err).Warn("failed to update management asset on disk")
-			return nil, nil
-		}
-
-		log.Infof("management asset updated successfully (hash=%s)", downloadedHash)
 		return nil, nil
 	})
 
 	_, err := os.Stat(localPath)
 	return err == nil
+}
+
+// InstallLatestManagementHTML downloads the latest management.html release now.
+// It is an explicit user request, so it bypasses the background throttle and the
+// disable-auto-update-panel setting, but it uses the same release source and
+// requires the release to publish a SHA-256 digest that the download matches.
+func InstallLatestManagementHTML(ctx context.Context, staticDir string, proxyURL string, panelRepository string) error {
+	staticDir = strings.TrimSpace(staticDir)
+	if staticDir == "" {
+		return errors.New("empty static directory")
+	}
+	localPath := filepath.Join(staticDir, managementAssetName)
+	_, err, _ := sfGroup.Do(localPath+"#install", func() (interface{}, error) {
+		return nil, syncManagementHTML(ctx, staticDir, newHTTPClient(proxyURL), resolveReleaseURL(panelRepository), true)
+	})
+	return err
+}
+
+// syncManagementHTML fetches the latest release metadata from releaseURL and replaces the
+// local asset when the published digest differs. requireDigest rejects releases that do
+// not publish a SHA-256 digest for the asset.
+func syncManagementHTML(ctx context.Context, staticDir string, client *http.Client, releaseURL string, requireDigest bool) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	localPath := filepath.Join(staticDir, managementAssetName)
+
+	if errMkdirAll := os.MkdirAll(staticDir, 0o755); errMkdirAll != nil {
+		return fmt.Errorf("prepare static directory: %w", errMkdirAll)
+	}
+
+	localHash, err := fileSHA256(localPath)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			log.WithError(err).Debug("failed to read local management asset hash")
+		}
+		localHash = ""
+	}
+
+	asset, remoteHash, err := fetchLatestAsset(ctx, client, releaseURL)
+	if err != nil {
+		return fmt.Errorf("fetch latest management release information: %w", err)
+	}
+	if remoteHash == "" && requireDigest {
+		return errors.New("latest management release does not publish a sha256 digest")
+	}
+
+	if remoteHash != "" && localHash != "" && strings.EqualFold(remoteHash, localHash) {
+		log.Debug("management asset is already up to date")
+		return nil
+	}
+
+	data, downloadedHash, err := downloadAsset(ctx, client, asset.BrowserDownloadURL)
+	if err != nil {
+		return err
+	}
+
+	if remoteHash != "" && !strings.EqualFold(remoteHash, downloadedHash) {
+		log.Errorf("management asset digest mismatch: expected %s got %s — aborting update for safety", remoteHash, downloadedHash)
+		return fmt.Errorf("management asset digest mismatch")
+	}
+
+	if err = atomicWriteFile(localPath, data); err != nil {
+		return fmt.Errorf("write management asset: %w", err)
+	}
+
+	log.Infof("management asset updated successfully (hash=%s)", downloadedHash)
+	return nil
 }
 
 func resolveReleaseURL(repo string) string {
