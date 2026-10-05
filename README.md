@@ -64,10 +64,6 @@ This is the gremlinlabs fork of [router-for-me/CLIProxyAPI](https://github.com/r
 
 Management panel changes live in [gremlin-labs/Cli-Proxy-API-Management-Center](https://github.com/gremlin-labs/Cli-Proxy-API-Management-Center). The proxy still downloads the upstream panel by default.
 
-## Sponsor
-
-For the list of project sponsors, see the [original README](https://github.com/router-for-me/CLIProxyAPI#sponsor).
-
 ## Overview
 
 - OpenAI/Gemini/Claude/Grok compatible API endpoints for CLI models
@@ -95,18 +91,6 @@ CLIProxyAPI Guides: [https://help.router-for.me/](https://help.router-for.me/)
 
 see [MANAGEMENT_API.md](https://help.router-for.me/management/api)
 
-## Usage Statistics
-
-Since v6.10.0, CLIProxyAPI and [CPAMC](https://github.com/router-for-me/Cli-Proxy-API-Management-Center) no longer ship built-in usage statistics. If you need usage statistics, use:
-
-### [CPA Usage Keeper](https://github.com/Willxup/cpa-usage-keeper)
-
-Standalone persistence and visualization service for CLIProxyAPI, with periodic data sync, SQLite storage, aggregate APIs, and a built-in dashboard for usage and statistics.
-
-### [CPA-Manager-Plus](https://github.com/seakee/CPA-Manager-Plus)
-
-Full CLIProxyAPI management center with request-level monitoring and cost estimates. CPA-Manager tracks collected requests by account, model, channel, latency, status, and token usage; estimates cost with editable model prices and one-click LiteLLM price sync; persists events in SQLite; and provides Codex account-pool operations with batch inspection, quota detection, unhealthy account discovery, cleanup suggestions, and one-click execution for day-to-day multi-account maintenance.
-
 ## SDK Docs
 
 - Usage: [docs/sdk-usage.md](docs/sdk-usage.md)
@@ -125,30 +109,21 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 4. Push to the branch (`git push origin feature/amazing-feature`)
 5. Open a Pull Request
 
+## Sponsor
+
+For the list of project sponsors, see the [original README](https://github.com/router-for-me/CLIProxyAPI#sponsor).
+
+## Usage Statistics
+
+CLIProxyAPI no longer ships built-in usage statistics. For third-party usage statistics tools, see the [original README](https://github.com/router-for-me/CLIProxyAPI#usage-statistics).
+
 ## Who is with us?
 
 For the list of projects built on CLIProxyAPI, see the [original README](https://github.com/router-for-me/CLIProxyAPI#who-is-with-us).
 
 ## More choices
 
-Those projects are ports of CLIProxyAPI or inspired by it:
-
-### [9Router](https://github.com/decolua/9router)
-
-A Next.js implementation inspired by CLIProxyAPI, easy to install and use, built from scratch with format translation (OpenAI/Claude/Gemini/Ollama), combo system with auto-fallback, multi-account management with exponential backoff, a Next.js web dashboard, and support for CLI tools (Cursor, Claude Code, Cline, RooCode) - no API keys needed.
-
-### [OmniRoute](https://github.com/diegosouzapw/OmniRoute)
-
-Never stop coding. Smart routing to FREE & low-cost AI models with automatic fallback.
-
-OmniRoute is an AI gateway for multi-provider LLMs: an OpenAI-compatible endpoint with smart routing, load balancing, retries, and fallbacks. Add policies, rate limits, caching, and observability for reliable, cost-aware inference.
-
-### [Codex Switch](https://github.com/9ycrooked/CodexSwitch)
-
-This is a tool built with Tauri 2 + Vue 3 for managing multiple OpenAI Codex desktop accounts. Switch between saved ChatGPT/Codex certification profiles, check 5-hour and weekly quota usage in real time, verify token health, view active account details, and import or save auth.json files without manual copying.
-
-> [!NOTE]  
-> If you have developed a port of CLIProxyAPI or a project inspired by it, please open a PR to add it to this list.
+For ports of CLIProxyAPI and projects inspired by it, see the [original README](https://github.com/router-for-me/CLIProxyAPI#more-choices).
 
 ## License
 
